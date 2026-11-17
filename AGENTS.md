@@ -77,3 +77,7 @@ release-notes/                    版本发布日志
 - `apps/electron/package.json` 是桌面应用版本；`packages/*/package.json` 是各共享包版本；默认 Skill 改动还必须递增其 `SKILL.md` frontmatter 的 `version`。
 - 仅在功能行为、安装方式或用户流程发生变化时更新 README / tutorial / release notes；改文档前先取得用户授权。
 - 提交前检查 `git diff`，不要覆盖用户已有改动或提交无关文件。
+
+## 非云功能改造交接
+
+继续安装版非云功能改造前，先阅读 [当前交接记录](docs/plans/2026-11-17-local-upgrade-handoff.md) 和 [实施规格](spec.md)。交接记录提供阶段状态、代码入口、下一任务、验证命令与环境变化；接手时先核对当前分支和 `git status`。
