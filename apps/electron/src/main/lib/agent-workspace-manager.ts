@@ -1,3 +1,4 @@
+import { notifyWorkspaceResourcesChanged } from './workspace-resource-events'
 /**
  * Agent 工作区管理器
  *
@@ -122,6 +123,7 @@ function writeIndex(index: AgentWorkspacesIndex): void {
 
   try {
     writeJsonFileAtomic(indexPath, index)
+    notifyWorkspaceResourcesChanged()
   } catch (error) {
     console.error('[Agent 工作区] 写入索引文件失败:', error)
     throw new Error('写入项目配置索引失败')
@@ -1921,6 +1923,7 @@ function readWorkspaceConfig(workspaceSlug: string): WorkspaceConfig {
 function writeWorkspaceConfig(workspaceSlug: string, config: WorkspaceConfig): void {
   const configPath = getWorkspaceConfigPath(workspaceSlug)
   writeJsonFileAtomic(configPath, config)
+  notifyWorkspaceResourcesChanged()
 }
 
 /** IDs of CLI integrations that are intentionally disabled only for Proma in this workspace. */

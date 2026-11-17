@@ -1,3 +1,12 @@
+import { assertNoProjectMutation, canonicalProjectPath, hasProjectActivity, projectPathsOverlap } from './lib/project-mutation-guard'
+import { isWithinTurnRoot, turnPathKey } from './lib/turn-changes/paths'
+import { TurnRestoreService } from './lib/turn-changes/restore'
+import { getTurnChangeRecorder, hasTurnChangesInProject, startTurnChangesMaintenance } from './lib/turn-changes/service'
+import { registerTurnOperationsIpcHandlers } from './lib/turn-changes/operations-ipc'
+import { removeProjectWorktree } from './lib/worktree-removal'
+import { hasTerminalsInProject, releaseExitedTerminalsInProject } from './lib/terminal-service'
+import { syncWorkspaceDirectoryWatchers } from './lib/workspace-watcher'
+import { isAgentSessionDeleting } from './lib/agent-session-manager'
 /**
  * IPC 处理器模块
  *
@@ -235,6 +244,8 @@ import {
 } from './lib/installer-downloader'
 import { getEffectiveProxyUrl, getProxySettings, saveProxySettings } from './lib/proxy-settings-service'
 import { getFetchFn } from './lib/proxy-fetch'
+import { registerNetworkIpcHandlers } from './lib/network/network-ipc'
+import { registerTurnChangesIpcHandlers } from './lib/turn-changes/ipc'
 import { detectSystemProxy } from './lib/system-proxy-detector'
 import {
   listAutomations,
@@ -1366,17 +1377,58 @@ export function resolveAppIconPath(variantId: string): string | null {
   return join(resourcesDir, 'proma-logos', `proma-${variantId}.png`)
 }
 
-function releaseDirectoryWatcherIfUnreferenced(dirPath: string): void {
-  const isStillReferenced = listAgentWorkspaces().some((workspace) =>
-    workspace.projectRootPath === dirPath
-    || getWorkspaceAttachedDirectories(workspace.slug).includes(dirPath)
-    || getWorkspaceAttachedFiles(workspace.slug).some((filePath) => dirname(filePath) === dirPath),
-  ) || listAgentSessions().some((session) =>
-    session.attachedDirectories?.includes(dirPath)
-    || session.attachedFiles?.some((filePath) => dirname(filePath) === dirPath),
-  )
 
-  if (!isStillReferenced) unwatchAttachedDirectory(dirPath)
+/** 运行中的会话按所有显式授权根保护，涵盖后台、委派、自动化和未完成预检。 */
+function isProjectOperationBusy(root: string): boolean {
+  if (hasProjectActivity(root) || hasTurnChangesInProject(root) || hasTerminalsInProject(root)) return true
+  return listAgentSessions().some(session => {
+    if (!isAgentSessionBusy(session.id)) return false
+    const workspace = session.workspaceId ? getAgentWorkspace(session.workspaceId) : undefined
+    const roots = [
+      ...session.attachedDirectories ?? [], ...session.attachedFiles ?? [],
+      ...session.activeWorktree?.path ? [session.activeWorktree.path] : [],
+      ...(workspace ? [getProjectFilesPath(workspace.slug), ...getWorkspaceAttachedDirectories(workspace.slug), ...getWorkspaceAttachedFiles(workspace.slug)] : []),
+      ...resolveAgentCwd(workspace, session.id, session.agentCwdMode, session.activeWorktree) ? [resolveAgentCwd(workspace, session.id, session.agentCwdMode, session.activeWorktree)!] : [],
+    ]
+    return roots.some(path => projectPathsOverlap(root, path))
+  })
+}
+
+function resolveTurnRestoreSession(sessionId: string) {
+  const meta = getAgentSessionMeta(sessionId)
+  const workspace = meta?.workspaceId ? getAgentWorkspace(meta.workspaceId) : undefined
+  if (!meta || !workspace || isAgentSessionDeleting(sessionId)) return undefined
+  const primary = getProjectFilesPath(workspace.slug)
+  return { workspaceId: workspace.id, roots: [primary, ...meta.activeWorktree ? [meta.activeWorktree.path] : []],
+    identity: JSON.stringify([workspace.id, workspace.slug, primary, meta.activeWorktree ?? null]) }
+}
+
+async function authorizeTurnRestoreRoot(sessionId: string, root: string): Promise<boolean> {
+  const context = resolveTurnRestoreSession(sessionId)
+  if (!context?.roots.some(path => turnPathKey(canonicalProjectPath(path)) === turnPathKey(root))) return false
+  const meta = getAgentSessionMeta(sessionId)
+  if (meta?.activeWorktree && turnPathKey(canonicalProjectPath(meta.activeWorktree.path)) === turnPathKey(root)) {
+    const main = await getMainRepoRoot(root)
+    if (!main || turnPathKey(canonicalProjectPath(main)) !== turnPathKey(canonicalProjectPath(meta.activeWorktree.mainRepoRoot))) return false
+  }
+  return ensurePathAllowedWithWorktree(root, normalizeFileAccessOptions({ sessionId }))
+}
+
+function isWorktreeResourceReferenced(root: string): boolean {
+  const paths = listAgentWorkspaces().flatMap(workspace => [getProjectFilesPath(workspace.slug), ...getWorkspaceAttachedDirectories(workspace.slug), ...getWorkspaceAttachedFiles(workspace.slug)])
+  paths.push(...listAgentSessions().flatMap(session => [...session.attachedDirectories ?? [], ...session.attachedFiles ?? []]))
+  return paths.some(path => isWithinTurnRoot(turnPathKey(root), turnPathKey(canonicalProjectPath(path))))
+}
+
+async function purgeDeletedSessionSnapshots(sessionId: string): Promise<void> {
+  try {
+    const result = await getTurnChangeRecorder().store.cleanup({ sessionId })
+    if (result.skipped || result.partial) console.warn('[会话删除] 部分快照清理未完成:', result)
+  } catch (error) { console.warn('[会话删除] 快照清理未完成，将在维护时重试:', error) }
+}
+
+function releaseDirectoryWatcherIfUnreferenced(_dirPath: string): void {
+  syncWorkspaceDirectoryWatchers()
 }
 
 function releaseAttachedFileWatchers(filePaths: readonly string[] | undefined): void {
@@ -1396,6 +1448,41 @@ async function withOAuthDeviceCodeQr<T extends CodexOAuthDeviceCode | GithubCopi
 }
 
 export function registerIpcHandlers(): void {
+  registerNetworkIpcHandlers()
+  registerTurnChangesIpcHandlers()
+  const restoreService = new TurnRestoreService(getTurnChangeRecorder().store, {
+    resolveSession: resolveTurnRestoreSession, authorizeRoot: authorizeTurnRestoreRoot, isBusy: isProjectOperationBusy,
+    onRestored: (_owner, path, root) => {
+      invalidateGitDiffCache(join(root, path))
+      getMainWindow()?.webContents.send(AGENT_IPC_CHANNELS.WORKSPACE_FILES_CHANGED, [join(root, path)])
+    },
+  })
+  registerTurnOperationsIpcHandlers({ restore: restoreService, removeWorktree: (input, assertCurrent) => removeProjectWorktree(input, {
+    assertCurrent, isBusy: isProjectOperationBusy, isReferenced: isWorktreeResourceReferenced,
+    authorize: async (sessionId, root) => {
+      if (!resolveTurnRestoreSession(sessionId)) return false
+      const main = await getMainRepoRoot(root)
+      return main !== null && await ensurePathAllowedWithWorktree(main, normalizeFileAccessOptions({ sessionId }))
+        && await ensurePathAllowedWithWorktree(root, normalizeFileAccessOptions({ sessionId }))
+    },
+    onRemoved: async root => {
+      const cleared: string[] = []
+      for (const session of listAgentSessions()) {
+        if (!session.activeWorktree || turnPathKey(canonicalProjectPath(session.activeWorktree.path)) !== turnPathKey(root)) continue
+        const updated = updateAgentSessionMeta(session.id, { activeWorktree: undefined })
+        restoreService.invalidateSession(session.id)
+        cleared.push(session.id)
+        getMainWindow()?.webContents.send(AGENT_IPC_CHANNELS.ACTIVE_WORKTREE_UPDATED, updated)
+      }
+      releaseExitedTerminalsInProject(root)
+      syncWorkspaceDirectoryWatchers()
+      invalidateGitDiffCache(root)
+      getMainWindow()?.webContents.send(AGENT_IPC_CHANNELS.WORKSPACE_FILES_CHANGED, [root])
+      return cleared
+    },
+  }) })
+  const stopTurnMaintenance = startTurnChangesMaintenance(() => new Set(listAgentSessions().map(session => session.id)))
+  app.once('will-quit', stopTurnMaintenance)
   // ===== 本地终端（仅主 renderer 可操作，不能指定可执行文件） =====
   const assertMainTerminalRenderer = (senderId: number): void => {
     const mainWindow = getMainWindow()
@@ -2670,6 +2757,8 @@ export function registerIpcHandlers(): void {
       }
       const session = getAgentSessionMeta(input.sessionId)
       if (!session) throw new Error(`Agent 会话不存在: ${input.sessionId}`)
+      if (isAgentSessionBusy(input.sessionId)) throw new Error('会话正在启动、运行或有待处理队列，不能切换 worktree')
+      assertNoProjectMutation([...(resolveTurnRestoreSession(input.sessionId)?.roots ?? []), ...(input.worktreePath ? [input.worktreePath] : [])])
       if (input.worktreePath === null) {
         return updateAgentSessionMeta(input.sessionId, { activeWorktree: undefined })
       }
@@ -2687,6 +2776,8 @@ export function registerIpcHandlers(): void {
 
       const mainRepoRoot = await getMainRepoRoot(selected.path)
       if (!mainRepoRoot) throw new Error('无法确认 worktree 的主仓库')
+      if (isAgentSessionBusy(input.sessionId)) throw new Error('会话已开始运行，不能切换 worktree')
+      assertNoProjectMutation([input.worktreePath])
       return updateAgentSessionMeta(input.sessionId, {
         activeWorktree: {
           path: realpathOrResolve(selected.path),
@@ -2725,6 +2816,9 @@ export function registerIpcHandlers(): void {
       await browserController.close(id)
       closeTerminalsForSession(id)
       deleteAgentSession(id)
+      restoreService.invalidateSession(id)
+      await purgeDeletedSessionSnapshots(id)
+      syncWorkspaceDirectoryWatchers()
       releaseAttachedFileWatchers(attachedFiles)
     }
   )
@@ -2995,6 +3089,8 @@ export function registerIpcHandlers(): void {
         closeTerminalsForSession(sessionId)
         await browserController.close(sessionId)
         deleteAgentSession(sessionId)
+        restoreService.invalidateSession(sessionId)
+        await purgeDeletedSessionSnapshots(sessionId)
       }
       for (const automationId of affectedAutomationIds) {
         deleteAutomation(automationId)

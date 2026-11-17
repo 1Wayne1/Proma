@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils'
 import { ImageLightbox, type LightboxImage } from '@/components/ui/image-lightbox'
 import { ContentBlock } from './ContentBlock'
 import { TurnFileChangesSummary, buildTurnFileNameMap } from './TurnFileChangesSummary'
+import { TurnChangesPanel } from './TurnChangesPanel'
 import { TurnSkillUsageSummary } from './TurnSkillUsageSummary'
 import { ProcessBlockGroup, buildAssistantTurnRenderItems } from './ProcessBlockGroup'
 import { extractToolResultText, TASK_TOOL_NAMES } from './task-progress'
@@ -577,6 +578,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
             turnMessages={turn.turnMessages}
           />
           <TurnFileChangesSummary turnMessages={turn.turnMessages} basePath={basePath} />
+          <TurnChangesPanel turnId={turn.inputMessage?.uuid} />
         </>
       )}
       {/* 操作栏：流式输出完成后显示操作按钮 */}

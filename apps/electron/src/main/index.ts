@@ -1,3 +1,4 @@
+import { hasActiveTurnChanges, drainTurnChanges } from './lib/turn-changes/service'
 import { app, BrowserWindow, dialog, Menu, nativeTheme, protocol, screen, shell } from 'electron'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
@@ -938,7 +939,21 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('before-quit', () => {
+let turnChangesQuitPending = false
+let turnChangesQuitReady = false
+app.on('before-quit', (event) => {
+  if (!turnChangesQuitReady && hasActiveTurnChanges()) {
+    event.preventDefault()
+    if (!turnChangesQuitPending) {
+      turnChangesQuitPending = true
+      stopAllAgents()
+      void drainTurnChanges().catch(() => console.warn('[逐轮变更] 退出收束未完成')).finally(() => {
+        turnChangesQuitReady = true
+        app.quit()
+      })
+    }
+    return
+  }
   // 标记正在退出，让 close 事件不再阻止关闭
   setQuitting()
 

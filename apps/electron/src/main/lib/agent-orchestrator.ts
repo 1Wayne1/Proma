@@ -1,3 +1,5 @@
+import { assertNoProjectMutation, registerProjectActivity } from './project-mutation-guard'
+import type { ProjectActivityLease } from './project-mutation-guard'
 /**
  * AgentOrchestrator — Agent 编排层
  *
@@ -15,6 +17,10 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { createTurnChangesRun, finishTurnChangesRun, abortSessionTurnChanges, abortAllTurnChanges, drainTurnChanges } from './turn-changes/service'
+import { withTurnChangesPermission } from './turn-changes/run'
+import { resolveRetriedTurnUuid } from './turn-changes/identity'
+import type { TurnChangesRun } from './turn-changes/run'
 import { mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
@@ -50,7 +56,7 @@ import { getAdapter, fetchTitle } from '@proma/core'
 import pkg from '../../../package.json' with { type: 'json' }
 import { getFetchFn } from './proxy-fetch'
 import { getEffectiveProxyUrl } from './proxy-settings-service'
-import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, removeSDKErrorMessage, updateSDKUserMessageSkillActivations, rewindPiAgentSession, resolveAgentCwd, getActiveWorktreePath, getAgentCwdMode, getSessionWorkbenchLayout, resolveSessionWorkbenchContextDir, isAgentSessionDeleting } from './agent-session-manager'
+import { appendSDKMessages, updateAgentSessionMeta, getAgentSessionMeta, getAgentSessionMessages, getAgentSessionSDKMessages, removeSDKErrorMessage, updateSDKUserMessageSkillActivations, rewindPiAgentSession, resolveAgentCwd, getActiveWorktreePath, getAgentCwdMode, getSessionWorkbenchLayout, resolveSessionWorkbenchContextDir, isAgentSessionDeleting } from './agent-session-manager'
 import { getAgentWorkspace, getProjectFilesPath, getWorkspaceMcpConfig, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles, getWorkspaceAgentsMdPath, readWorkspaceAgentsMd, getWorkspaceMemoryGuidance, isWorkspaceProjectKnowledgeMaintenanceApproved } from './agent-workspace-manager'
 import { getLocalProjectRootStatus } from './project-root-health'
 import { getMcpApiKeyEnvironment, getMcpOAuthHeaders } from './mcp-oauth-service'
@@ -219,6 +225,7 @@ export class AgentOrchestrator {
   private adapter: AgentProviderAdapter
   private eventBus: AgentEventBus
   private activeSessions = new Map<string, number>()
+  private readonly projectActivities = new Map<string, ProjectActivityLease>()
   private activeSessionStartedAt = new Map<string, number>()
   private nextRunGenerationBySession = new Map<string, number>()
 
@@ -689,6 +696,7 @@ export class AgentOrchestrator {
     const streamStartedAt = input.startedAt ?? Date.now()
     let userMessagePersisted = false
     let initialUserMessageUuid: string | undefined
+    let turnChangesRetryUuid: string | undefined
     let sessionMeta = getAgentSessionMeta(sessionId)
 
     const completeBeforeRun = (options: {
@@ -749,6 +757,7 @@ export class AgentOrchestrator {
     // 手动重试直接删除原错误，避免它在下一轮完成后仍被历史回放。
     // 删除失败不阻断重试（例如旧版本遗留的无 UUID 错误）。
     if (retryOfErrorUuid) {
+      if (sessionMeta) turnChangesRetryUuid = resolveRetriedTurnUuid(getAgentSessionSDKMessages(sessionId), retryOfErrorUuid, rawUserMessage ?? userMessage)
       try {
         removeSDKErrorMessage(sessionId, retryOfErrorUuid)
       } catch (error) {
@@ -935,7 +944,16 @@ export class AgentOrchestrator {
       } : {}),
     })
 
+    const activityKey = JSON.stringify([sessionId, runGeneration])
+    let projectActivity: ProjectActivityLease | undefined
+    let turnChangesRun: TurnChangesRun | undefined
+    let turnChangesFailed = false
+    const finishChanges = async (completion: 'completed' | 'cancelled' | 'failed'): Promise<void> => {
+      if (turnChangesRun) await finishTurnChangesRun(turnChangesRun, completion)
+    }
     const releaseActiveRun = (): void => {
+      projectActivity?.release()
+      if (this.projectActivities.get(activityKey) === projectActivity) this.projectActivities.delete(activityKey)
       // 在发送 STREAM_COMPLETE 前释放 active slot，避免渲染进程已进入空闲态、
       // 主进程仍在 finally 前短暂拒绝下一条消息。
       const ownsActiveRun = this.activeSessions.get(sessionId) === runGeneration
@@ -946,18 +964,20 @@ export class AgentOrchestrator {
         this.queuedMessageUuids.delete(sessionId)
       }
     }
-    const completeRun = (
+    const completeRun = async (
       messages?: AgentMessage[],
       opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[] },
-    ): void => {
+    ): Promise<void> => {
+      await finishChanges(opts?.stoppedByUser ? 'cancelled' : turnChangesFailed || opts?.resultSubtype?.startsWith('error') ? 'failed' : 'completed')
       releaseActiveRun()
       callbacks.onComplete(messages, { ...opts, runGeneration })
     }
-    const failRun = (
+    const failRun = async (
       error: string,
       messages?: AgentMessage[],
       opts?: { stoppedByUser?: boolean; startedAt?: number; resultSubtype?: string; resultErrors?: string[] },
-    ): void => {
+    ): Promise<void> => {
+      await finishChanges('failed')
       releaseActiveRun()
       callbacks.onError(error, { runGeneration })
       callbacks.onComplete(messages, { ...opts, runGeneration })
@@ -1604,7 +1624,21 @@ export class AgentOrchestrator {
           event: { type: 'context_window', contextWindow },
         })
       }
+      assertNoProjectMutation([agentCwd, ...allAdditionalDirectories, ...(workspaceSlug ? [getProjectFilesPath(workspaceSlug)] : [])])
+      projectActivity = registerProjectActivity([agentCwd, ...allAdditionalDirectories, ...(workspaceSlug ? [getProjectFilesPath(workspaceSlug)] : [])])
+      this.projectActivities.set(activityKey, projectActivity)
       const piCustomTools = [...piBuiltinTools, ...piMcpTools, ...(extensions.piCustomTools ?? [])]
+      const changesTurnId = initialUserMessageUuid ?? turnChangesRetryUuid
+      if (workspaceId && workspaceSlug && changesTurnId) {
+        turnChangesRun = createTurnChangesRun({
+          owner: { sessionId, workspaceId, turnId: changesTurnId },
+          root: sessionMeta?.activeWorktree ? agentCwd : getProjectFilesPath(workspaceSlug),
+          toolCwd: agentCwd,
+          isCurrent: () => this.activeSessions.get(sessionId) === runGeneration && !isAgentSessionDeleting(sessionId),
+          onUnavailable: () => console.warn('[逐轮变更] 本轮采样不完整，任务继续执行'),
+        }, runGeneration)
+        await turnChangesRun.advance(changesTurnId)
+      }
       let githubCopilotCredentialsSnapshot = githubCopilotOAuthCredentials
       const queryOptions: PiAgentQueryOptions = {
         sessionId,
@@ -1623,7 +1657,7 @@ export class AgentOrchestrator {
         runtimeEnv,
         ...(maxTurns != null && { maxTurns }),
         permissionMode: initialPermissionMode,
-        canUseTool,
+        canUseTool: withTurnChangesPermission(canUseTool, () => turnChangesRun, () => this.activeSessions.get(sessionId) === runGeneration && !isAgentSessionDeleting(sessionId)),
         systemPrompt: systemPromptAppend + buildPiAdditionalDirectoriesPrompt(allAdditionalDirectories),
         ...(instructionFiles.length > 0 && { projectInstructionFiles: instructionFiles }),
         ...(projectInstructions && {
@@ -1642,6 +1676,7 @@ export class AgentOrchestrator {
           skillWorkspaceSlug: workspaceSlug,
         } : {}),
         ...(mentionedSkills?.length ? { skillMentions: mentionedSkills } : {}),
+        onUserTurnStarted: (uuid) => { void turnChangesRun?.advance(uuid) },
         onSkillActivated: recordSkillActivation,
         ...(isCompactCommand ? { compactRequest: true } : {}),
         ...(sessionMeta?.codexFastMode && channel.provider === 'openai-codex' ? { codexFastMode: true } : {}),
@@ -1725,7 +1760,7 @@ export class AgentOrchestrator {
           const wasStoppedByUser = this.consumeStoppedByUser(sessionId, runGeneration)
           this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
           try { updateAgentSessionMeta(sessionId, { stoppedByUser: wasStoppedByUser }) } catch { /* 会话可能已删除 */ }
-          completeRun(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt })
+          await completeRun(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt })
           return
         }
 
@@ -1737,6 +1772,7 @@ export class AgentOrchestrator {
 
         try {
           // 获取异步迭代器（手动 .next() 以支持 Promise.race 中断）
+          assertNoProjectMutation([agentCwd, ...allAdditionalDirectories, ...(workspaceSlug ? [getProjectFilesPath(workspaceSlug)] : [])])
           const queryIterable = this.adapter.query(queryOptions)
           const queryIterator = queryIterable[Symbol.asyncIterator]()
 
@@ -1925,6 +1961,7 @@ export class AgentOrchestrator {
                   try { updateAgentSessionMeta(sessionId, { sdkSessionId: undefined }) } catch { /* 忽略 */ }
                 }
 
+                turnChangesFailed = true
                 const errorContent = typedError.title
                     ? `${typedError.title}: ${typedError.message}`
                     : typedError.message
@@ -1951,7 +1988,7 @@ export class AgentOrchestrator {
                 // 透传归一化后的错误消息到前端，避免 SDK 原始 API Error 直接暴露给用户。
                 emitLiveSdkMessage(errorSDKMsg)
                 try { updateAgentSessionMeta(sessionId, {}) } catch { /* 忽略 */ }
-                completeRun(getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
+                await completeRun(getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
                 return
               }
             }
@@ -2088,7 +2125,7 @@ export class AgentOrchestrator {
 
           if (!wasStoppedByUser && visibleRunMessageCount === 0) {
             const errorContent = this.persistEmptyResponseError(sessionId, capturedResultSubtype, capturedResultErrors)
-            failRun(errorContent, getAgentSessionMessages(sessionId), {
+            await failRun(errorContent, getAgentSessionMessages(sessionId), {
               startedAt: streamStartedAt,
               resultSubtype: EMPTY_RESPONSE_RESULT_SUBTYPE,
               resultErrors: [errorContent],
@@ -2107,7 +2144,7 @@ export class AgentOrchestrator {
           }
 
           // 发送完成信号
-          completeRun(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt, resultSubtype: capturedResultSubtype, resultErrors: capturedResultErrors })
+          await completeRun(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt, resultSubtype: capturedResultSubtype, resultErrors: capturedResultErrors })
 
           return
 
@@ -2118,7 +2155,7 @@ export class AgentOrchestrator {
             const wasStoppedByUser = this.consumeStoppedByUser(sessionId, runGeneration)
             this.persistSDKMessages(sessionId, accumulatedMessages, Date.now() - queryStartedAt)
             try { updateAgentSessionMeta(sessionId, { stoppedByUser: wasStoppedByUser }) } catch { /* 会话可能已删除 */ }
-            completeRun(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt })
+            await completeRun(getAgentSessionMessages(sessionId), { stoppedByUser: wasStoppedByUser, startedAt: streamStartedAt })
             return
           }
 
@@ -2239,7 +2276,7 @@ export class AgentOrchestrator {
             console.error('[Agent 编排] 保存错误消息失败:', saveError)
           }
 
-          failRun(userFacingError, getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
+          await failRun(userFacingError, getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
 
           // 保留 Pi session ID，确保网络或上游临时失败后的下一轮可继续 resume。
           if (existingSdkSessionId) {
@@ -2262,9 +2299,10 @@ export class AgentOrchestrator {
         _errorTitle: '会话恢复失败',
       } as unknown as SDKMessage
       appendSDKMessages(sessionId, [recoveryError])
-      failRun(recoveryFailure, getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
+      await failRun(recoveryFailure, getAgentSessionMessages(sessionId), { startedAt: streamStartedAt })
 
     } finally {
+      await finishChanges('failed')
       // 只在 generation 匹配时才清理，防止旧流的 finally 误删新流的注册
       releaseActiveRun()
       permissionService.clearSessionPending(sessionId)
@@ -2282,6 +2320,8 @@ export class AgentOrchestrator {
    */
   stop(sessionId: string, stopBeforeRun = false): void | Promise<void> {
     const runGeneration = this.activeSessions.get(sessionId)
+    const releaseStopActivity = this.projectActivities.get(JSON.stringify([sessionId, runGeneration]))?.retain()
+    const changeRuns = abortSessionTurnChanges(sessionId, runGeneration)
     this.activeSessions.delete(sessionId)
     this.activeSessionStartedAt.delete(sessionId)
     this.sessionPermissionModes.delete(sessionId)
@@ -2294,9 +2334,12 @@ export class AgentOrchestrator {
       this.stoppedBeforeRunSessions.add(sessionId)
     }
     this.queuedMessageUuids.delete(sessionId)
-    const abort = this.adapter.abort(sessionId)
+    const abort = Promise.resolve().then(() => this.adapter.abort(sessionId))
     console.log(`[Agent 编排] 已中止会话: ${sessionId}`)
-    return abort
+    return Promise.resolve(abort).finally(async () => {
+      try { await Promise.all(changeRuns.map(run => finishTurnChangesRun(run, 'cancelled'))) }
+      finally { releaseStopActivity?.() }
+    })
   }
 
   /** 删除会话专用：等待已发出的底层中止请求完成，再移除持久化文件。 */
@@ -2391,7 +2434,9 @@ export class AgentOrchestrator {
       console.log(`[Agent 编排] 正在中止所有活跃会话 (${this.activeSessions.size} 个)...`)
     }
     // 即便 activeSessions 为空，也要调 dispose 清理可能残留的 pidMap / 子进程
+    abortAllTurnChanges()
     this.adapter.dispose()
+    void drainTurnChanges().catch(() => console.warn('[逐轮变更] 退出收束未完成'))
     this.activeSessions.clear()
     this.activeSessionStartedAt.clear()
     this.sessionPermissionModes.clear()

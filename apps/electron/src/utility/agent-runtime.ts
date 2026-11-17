@@ -185,6 +185,7 @@ function handleQueryStart(request: RuntimeRequest): void {
     onModelResolved: (model: string) => sendCallback(active, 'model_resolved', { model }),
     onContextWindow: (contextWindow: number) => sendCallback(active, 'context_window', { contextWindow }),
     onRetry: (update: unknown) => sendCallback(active, 'retry', { update }),
+    onUserTurnStarted: (userMessageUuid: string) => sendCallback(active, 'user_turn_started', { userMessageUuid }),
     onSkillActivated: (activations: unknown, userMessageUuid: string) => sendCallback(active, 'skill_activated', { activations, userMessageUuid }),
     onCodexOAuthCredentialsRefreshed: (credentials: unknown) => requestParent(
       AGENT_RUNTIME_METHODS.CAPABILITY_CODEX_OAUTH_REFRESHED,

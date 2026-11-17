@@ -1,5 +1,7 @@
+import { atom, useAtom } from 'jotai'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import * as React from 'react'
-import { ChevronDown, GitBranch, RotateCw, SquareTerminal } from 'lucide-react'
+import { ChevronDown, GitBranch, RotateCw, SquareTerminal, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import type { WorktreeInfo, WorkspaceWorktreeRepo } from '@proma/shared'
@@ -13,6 +15,8 @@ interface WorktreeSelectorProps {
   onSelect: (worktree: WorktreeInfo | null) => void
   onOpenTerminal?: (worktree: WorktreeInfo) => void
 }
+
+interface WorktreeRemovalState { target: WorktreeInfo | null; busy: boolean; message: string | null }
 
 interface RepoWorktrees {
   repo: WorkspaceWorktreeRepo
@@ -39,7 +43,13 @@ export function WorktreeSelector({
   const [isOpen, setIsOpen] = React.useState(false)
   // 初次挂载即保留工具栏高度，避免切回「改动」Tab 后选择器异步出现而推挤文件列表。
   const [isLoading, setIsLoading] = React.useState(true)
+  const removalAtom = React.useMemo(() => atom<WorktreeRemovalState>({ target: null, busy: false, message: null }), [sessionId])
+  const [removal, setRemoval] = useAtom(removalAtom)
+  const removalBusy = React.useRef(false)
+  const lifetime = React.useRef(0)
+  React.useEffect(() => { lifetime.current++; return () => { lifetime.current++; fetchSequenceRef.current++ } }, [sessionId])
   const dropdownRef = React.useRef<HTMLDivElement>(null)
+  const selectorButton = React.useRef<HTMLButtonElement>(null)
   /** 丢弃较早请求的迟到响应，避免手动刷新后回滚到旧 Worktree 列表。 */
   const fetchSequenceRef = React.useRef(0)
 
@@ -114,10 +124,41 @@ export function WorktreeSelector({
   const selectedWorktree = allWorktrees.find((wt) => normalizePathKey(wt.path) === normalizePathKey(selectedPath ?? ''))
   const hasMultipleRepos = repoWorktrees.length > 1
 
-  if (allWorktrees.length === 0 && !isLoading) return <></>
+  const removeSelected = async (): Promise<void> => {
+    if (!removal.target || removalBusy.current) return
+    const current = lifetime.current
+    const target = removal.target
+    removalBusy.current = true
+    setRemoval(previous => ({ ...previous, busy: true, message: null }))
+    try {
+      const result = await window.electronAPI.removeWorktree({ sessionId, worktreePath: target.path })
+      if (current !== lifetime.current) return
+      if (normalizePathKey(selectedPath ?? '') === normalizePathKey(result.path)) onSelect(null)
+      setRemoval({ target: null, busy: false, message: result.warnings?.join('；') ?? 'Worktree 已移除，开发分支仍保留。' })
+      await fetchWorktrees()
+    } catch (error) {
+      if (current === lifetime.current) setRemoval(previous => ({ ...previous, busy: false, message: error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '') : '移除失败，请检查 worktree 状态' }))
+    } finally { removalBusy.current = false }
+  }
+
+  if (allWorktrees.length === 0 && !isLoading && !removal.target) return removal.message ? <p role="status" className="border-b border-border px-2 py-2 text-xs text-muted-foreground">{removal.message}</p> : <></>
 
   return (
     <div ref={dropdownRef} className="relative shrink-0 border-b border-border/60 bg-content-area px-2 py-2">
+      {removal.message && <p role="status" aria-live="polite" className="mb-2 break-all text-xs text-muted-foreground">{removal.message}</p>}
+      <AlertDialog open={removal.target !== null} onOpenChange={open => { if (!open && !removal.busy) setRemoval(previous => ({ ...previous, target: null })) }}>
+        <AlertDialogContent onCloseAutoFocus={event => { event.preventDefault(); selectorButton.current?.focus() }} className="w-[calc(100%_-_2rem)]" onEscapeKeyDown={event => { if (removal.busy) event.preventDefault() }}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认移除 Worktree</AlertDialogTitle>
+            <AlertDialogDescription className="break-all">{removal.target?.path}。此操作移除开发目录，保留 Git 分支。活动任务、终端或未提交、未跟踪、被忽略的文件都会阻止移除；不会强制删除。</AlertDialogDescription>
+          </AlertDialogHeader>
+          {removal.message && <p role="alert" className="text-sm text-destructive">{removal.message}</p>}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={removal.busy}>取消</AlertDialogCancel>
+            <AlertDialogAction disabled={removal.busy} onClick={event => { event.preventDefault(); void removeSelected() }}>{removal.busy ? '正在移除…' : '确认移除目录'}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <div className="flex items-center gap-1.5">
         {allWorktrees.length === 0 ? (
           <div className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg bg-muted/45 px-2.5" aria-busy="true">
@@ -130,6 +171,7 @@ export function WorktreeSelector({
         ) : (
           <button
             type="button"
+            ref={selectorButton}
             onClick={() => setIsOpen((open) => !open)}
             className={cn(
               'flex h-9 min-w-0 flex-1 items-center gap-2 rounded-lg bg-muted/45 px-2.5 py-1.5 text-left transition-[background-color,color] hover:bg-muted/75',
@@ -230,6 +272,9 @@ export function WorktreeSelector({
                         </span>
                         <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">{wt.head}</span>
                       </button>
+                      <button type="button" disabled={removal.busy} onClick={() => { setIsOpen(false); setRemoval({ target: wt, busy: false, message: null }) }}
+                        className="mr-1 inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background/80 hover:text-destructive focus-visible:ring-2 focus-visible:ring-ring"
+                        aria-label={`移除 ${wt.branch} Worktree`} title="移除 Worktree（保留分支）"><Trash2 className="size-3.5" /></button>
                       {onOpenTerminal && (
                         <button
                           type="button"

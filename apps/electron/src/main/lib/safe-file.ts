@@ -6,7 +6,7 @@
  * - 读取：主文件 → .tmp 残留 → .bak 回退，多层容错
  */
 
-import { closeSync, copyFileSync, existsSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, copyFileSync, existsSync, linkSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { basename, dirname, join } from 'node:path'
 
@@ -42,6 +42,18 @@ export function writeJsonFileAtomic(filePath: string, data: object, skipBackup =
  * exclusively, and rename replaces the target itself rather than following it.
  */
 export function writeTextFileAtomic(filePath: string, content: string): void {
+  writeBytesFileAtomic(filePath, content)
+}
+
+export interface AtomicFileOptions {
+  mode?: number
+  /** 同步核对身份与内容后立即提交；不得在这里进行异步操作。 */
+  beforeCommit?: () => void
+  exclusive?: boolean
+}
+
+/** 原始字节原子写；新增恢复使用排他提交，不能覆盖预览后新建的文件。 */
+export function writeBytesFileAtomic(filePath: string, content: string | Uint8Array, options: AtomicFileOptions = {}): void {
   const parent = dirname(filePath)
   const stem = basename(filePath)
   let tmpPath: string | null = null
@@ -62,7 +74,10 @@ export function writeTextFileAtomic(filePath: string, content: string): void {
     writeFileSync(descriptor, content, 'utf-8')
     closeSync(descriptor)
     descriptor = null
-    renameSync(tmpPath, filePath)
+    if (options.mode !== undefined) chmodSync(tmpPath, options.mode)
+    options.beforeCommit?.()
+    if (options.exclusive) { linkSync(tmpPath, filePath); try { unlinkSync(tmpPath) } catch { /* 提交已经成功；残留临时链接不改变落盘结果。 */ } }
+    else renameSync(tmpPath, filePath)
     tmpPath = null
   } finally {
     if (descriptor !== null) closeSync(descriptor)

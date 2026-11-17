@@ -1,3 +1,7 @@
+import { DirectoryWatchSubscriptions } from './directory-watch-subscriptions'
+import { subscribeWorkspaceResourcesChanged } from './workspace-resource-events'
+import { getProjectFilesPath, getWorkspaceAttachedDirectories, getWorkspaceAttachedFiles, listAgentWorkspaces } from './agent-workspace-manager'
+import { isWithinTurnRoot } from './turn-changes/paths'
 /**
  * 工作区文件监听器
  *
@@ -45,6 +49,31 @@ let watcher: FSWatcher | null = null
 
 /** 已存在的附加目录监听器：路径 → FSWatcher */
 const attachedWatchers = new Map<string, FSWatcher>()
+const directorySubscriptions = new DirectoryWatchSubscriptions(path => {
+  // 主监听已经递归覆盖受管目录，不另开重复的底层 watcher。
+  if (!isWithinTurnRoot(resolve(getAgentWorkspacesDir()), path)) startAttachedDirectory(path)
+}, stopAttachedDirectory)
+let resourceRelease: (() => void) | undefined
+let resourceSyncPending = false
+let capabilitiesTimer: ReturnType<typeof setTimeout> | null = null
+let filesTimer: ReturnType<typeof setTimeout> | null = null
+const changedFilePaths = new Set<string>()
+
+/** 从持久化的显式会话/工作区归属重建引用；删除、迁移和自动化路径同样生效。 */
+export function syncWorkspaceDirectoryWatchers(): void {
+  if (!workspaceWatcherActive) return
+  const desired = new Map<string, string[]>()
+  for (const workspace of listAgentWorkspaces()) desired.set(`workspace:${workspace.id}`, [
+    getProjectFilesPath(workspace.slug), ...getWorkspaceAttachedDirectories(workspace.slug),
+    ...getWorkspaceAttachedFiles(workspace.slug).map(path => dirname(path)),
+  ])
+  for (const session of listAgentSessions()) desired.set(`session:${session.id}`, [
+    ...session.attachedDirectories ?? [], ...session.attachedFiles?.map(path => dirname(path)) ?? [],
+    ...session.activeWorktree?.path ? [session.activeWorktree.path] : [],
+  ])
+  directorySubscriptions.sync(desired)
+}
+
 
 /** 最近存在的父目录监听器，多个缺失根可复用同一个监听器。 */
 interface ParentDirectoryWatcher {
@@ -113,17 +142,6 @@ function releaseUnavailableDirectoryWatcher(dirPath: string): void {
   console.log('[附加目录监听] 已停止父目录监听:', parentPath)
 }
 
-function restoreAgentSessionAttachedDirectoryWatchers(): void {
-  for (const session of listAgentSessions()) {
-    for (const dirPath of session.attachedDirectories ?? []) {
-      watchAttachedDirectory(dirPath)
-    }
-    for (const filePath of session.attachedFiles ?? []) {
-      watchAttachedDirectory(dirname(filePath))
-    }
-  }
-}
-
 function watchUnavailableDirectoryParent(dirPath: string): void {
   const parentPath = findNearestExistingDirectory(dirname(dirPath))
   if (!parentPath) {
@@ -140,6 +158,8 @@ function watchUnavailableDirectoryParent(dirPath: string): void {
     try {
       const targetPaths = new Set<string>()
       const watcher = watch(parentPath, { recursive: false }, (_eventType, filename) => {
+        if (!workspaceWatcherActive || parentDirectoryWatchers.get(parentPath)?.watcher !== watcher) return
+        for (const path of [...targetPaths]) if (directorySubscriptions.has(path) && isExistingDirectory(path)) startAttachedDirectory(path)
         // 目录恢复、替换或权限变化后，通知 renderer 重新读取即时 root status。
         const normalizedFilename = normalizeWatchFilename(filename)
         if (normalizedFilename === null) {
@@ -161,6 +181,7 @@ function watchUnavailableDirectoryParent(dirPath: string): void {
       parentDirectoryWatchers.set(parentPath, entry)
 
       watcher.on('error', (err) => {
+        if (parentDirectoryWatchers.get(parentPath)?.watcher !== watcher) return
         console.error('[附加目录监听] 父目录监听出错，等待下次访问重建:', parentPath, err)
         try { watcher.close() } catch { /* watcher may already be closed */ }
         parentDirectoryWatchers.delete(parentPath)
@@ -170,8 +191,8 @@ function watchUnavailableDirectoryParent(dirPath: string): void {
         }
         scheduleWatcherRestart(() => {
           for (const targetPath of pathsToRestore) {
-            if (!attachedWatchers.has(targetPath) && !unavailableDirectoryParents.has(targetPath)) {
-              watchAttachedDirectory(targetPath)
+            if (directorySubscriptions.has(targetPath) && !attachedWatchers.has(targetPath) && !unavailableDirectoryParents.has(targetPath)) {
+              startAttachedDirectory(targetPath)
             }
           }
         })
@@ -197,7 +218,15 @@ export function startWorkspaceWatcher(win: BrowserWindow): void {
   mainWin = win
   // 会话附加目录只需在启动/监听器重启时恢复一次；LIST_SESSIONS 是高频读取路径，
   // 不能随每次列表 IPC 再遍历全部会话并触发同步 stat。
-  restoreAgentSessionAttachedDirectoryWatchers()
+  resourceRelease ??= subscribeWorkspaceResourcesChanged(() => {
+    if (resourceSyncPending || !workspaceWatcherActive) return
+    resourceSyncPending = true
+    queueMicrotask(() => {
+      resourceSyncPending = false
+      if (workspaceWatcherActive) { try { syncWorkspaceDirectoryWatchers() } catch (error) { console.warn('[目录监听] 同步资源失败:', error) } }
+    })
+  })
+  syncWorkspaceDirectoryWatchers()
   const watchDir = getAgentWorkspacesDir()
 
   if (!existsSync(watchDir)) {
@@ -205,10 +234,7 @@ export function startWorkspaceWatcher(win: BrowserWindow): void {
     return
   }
 
-  // 防抖定时器：按事件类型分别 debounce
-  let capabilitiesTimer: ReturnType<typeof setTimeout> | null = null
-  let filesTimer: ReturnType<typeof setTimeout> | null = null
-  const changedFilePaths = new Set<string>
+  if (watcher) return
 
   try {
     watcher = watch(watchDir, { recursive: true }, (_eventType, filename) => {
@@ -253,7 +279,9 @@ export function startWorkspaceWatcher(win: BrowserWindow): void {
 
     // EventEmitter 在 'error' 事件无监听器时会抛出未捕获异常并终止 Electron 主进程，
     // 当目录被删除/权限变更/iCloud 同步异常等运行时错误发生时即触发。必须显式监听并降级。
+    const runningWatcher = watcher
     watcher.on('error', (err) => {
+      if (watcher !== runningWatcher || !workspaceWatcherActive) return
       console.error('[工作区监听] 运行时错误，将尝试自愈重启:', err)
       try { watcher?.close() } catch { /* watcher 可能已自动关闭 */ }
       watcher = null
@@ -273,6 +301,13 @@ export function startWorkspaceWatcher(win: BrowserWindow): void {
  */
 export function stopWorkspaceWatcher(): void {
   workspaceWatcherActive = false
+  resourceRelease?.()
+  resourceRelease = undefined
+  directorySubscriptions.clear()
+  if (capabilitiesTimer) clearTimeout(capabilitiesTimer)
+  if (filesTimer) clearTimeout(filesTimer)
+  capabilitiesTimer = filesTimer = null
+  changedFilePaths.clear()
   for (const timer of watcherRestartTimers) clearTimeout(timer)
   watcherRestartTimers.clear()
   if (watcher) {
@@ -302,7 +337,10 @@ export function stopWorkspaceWatcher(): void {
  * 开始监听附加目录
  * 当目录内文件变化时，推送 WORKSPACE_FILES_CHANGED 事件
  */
-export function watchAttachedDirectory(dirPath: string): void {
+export function watchAttachedDirectory(_dirPath: string): void { syncWorkspaceDirectoryWatchers() }
+
+function startAttachedDirectory(dirPath: string): void {
+  if (!workspaceWatcherActive || !directorySubscriptions.has(dirPath)) return
   if (!isExistingDirectory(dirPath)) {
     // 本地项目根一开始不存在时不能直接 fs.watch；监听最近存在父目录即可在其恢复时
     // 触发一次 renderer 状态刷新。多个同父路径的根共享一个 watcher。
@@ -315,6 +353,7 @@ export function watchAttachedDirectory(dirPath: string): void {
 
   try {
     const w = watch(dirPath, { recursive: true }, (_eventType, filename) => {
+      if (!workspaceWatcherActive || attachedWatchers.get(dirPath) !== w || !directorySubscriptions.has(dirPath)) return
       const normalizedFilename = normalizeWatchFilename(filename)
       if (normalizedFilename === null || !shouldNotifyForWatchFilename(normalizedFilename)) return
       const changedPath = join(dirPath, normalizedFilename)
@@ -325,10 +364,11 @@ export function watchAttachedDirectory(dirPath: string): void {
     // 同主 watcher：监听 'error' 防止运行时异常拖死主进程。
     // 附加目录通常是用户外接的项目目录，断电/挂载/权限变化更易触发。
     w.on('error', (err) => {
+      if (attachedWatchers.get(dirPath) !== w) return
       console.error('[附加目录监听] 运行时错误，切换为父目录监听:', dirPath, err)
       try { w.close() } catch { /* 已关闭 */ }
       if (attachedWatchers.get(dirPath) === w) attachedWatchers.delete(dirPath)
-      watchUnavailableDirectoryParent(dirPath)
+      if (workspaceWatcherActive && directorySubscriptions.has(dirPath)) watchUnavailableDirectoryParent(dirPath)
     })
 
     attachedWatchers.set(dirPath, w)
@@ -342,7 +382,9 @@ export function watchAttachedDirectory(dirPath: string): void {
 /**
  * 停止监听附加目录
  */
-export function unwatchAttachedDirectory(dirPath: string): void {
+export function unwatchAttachedDirectory(_dirPath: string): void { syncWorkspaceDirectoryWatchers() }
+
+function stopAttachedDirectory(dirPath: string): void {
   const w = attachedWatchers.get(dirPath)
   if (w) {
     try { w.close() } catch { /* watcher may already be closed */ }

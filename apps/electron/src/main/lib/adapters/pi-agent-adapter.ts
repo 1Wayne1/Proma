@@ -158,6 +158,7 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   /** Workspace that owns `additionalSkillPaths`, used for relocatable Skill previews. */
   skillWorkspaceSlug?: string
   /** Skill 成功加载并注入 prompt 后回调。 */
+  onUserTurnStarted?: (userMessageUuid: string) => void
   onSkillActivated?: (activations: SkillActivation[], userMessageUuid: string) => void
   proxyUrl?: string
   /** Pi 模型请求传输策略：auto / sse / websocket / websocket-cached */
@@ -202,6 +203,7 @@ interface ActivePiSession {
   runtimeGuard?: AgentRuntimeGuard
   skillWorkspaceSlug?: string
   pendingSkillActivations: PendingPromptSkillActivationTracker
+  onUserTurnStarted?: (userMessageUuid: string) => void
   onSkillActivated?: (activations: SkillActivation[], userMessageUuid: string) => void
 }
 
@@ -1387,6 +1389,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
     active.runtimeGuard = runtimeGuard
     active.skillWorkspaceSlug = input.skillWorkspaceSlug
     active.onSkillActivated = input.onSkillActivated
+    active.onUserTurnStarted = input.onUserTurnStarted
     let unsubscribe: (() => void) | undefined
     let requestProxyDispatcher: Dispatcher | undefined
 
@@ -1651,7 +1654,10 @@ export class PiAgentAdapter implements AgentProviderAdapter {
               const prompt = getPiUserMessageText(event.message)
               if (!prompt) break
               const pending = active.pendingSkillActivations.consume(prompt)
-              if (pending) active.onSkillActivated?.(pending.activations, pending.userMessageUuid)
+              if (pending) {
+                active.onUserTurnStarted?.(pending.userMessageUuid)
+                if (pending.activations.length > 0) active.onSkillActivated?.(pending.activations, pending.userMessageUuid)
+              }
               break
             }
             case 'message_update': {

@@ -17,6 +17,7 @@ import {
 import { proxyConfigAtom, loadProxyConfigAtom, updateProxyConfigAtom } from '@/atoms/proxy-atoms'
 import { cn } from '@/lib/utils'
 import type { ProxyMode } from '@proma/shared'
+import { NetworkDiagnosticsSettings } from './NetworkDiagnosticsSettings'
 
 export function ProxySettings(): React.ReactElement {
   const [config, setConfig] = useAtom(proxyConfigAtom)
@@ -76,6 +77,7 @@ export function ProxySettings(): React.ReactElement {
 
   return (
     <div className="space-y-6">
+      <NetworkDiagnosticsSettings />
       {/* 代理开关 */}
       <SettingsSection
         title="代理配置"

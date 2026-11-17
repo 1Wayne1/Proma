@@ -1,9 +1,8 @@
 /**
  * Pi Runtime 用户 MCP 工具桥接层
  *
- * Claude runtime 继续使用 Claude Agent SDK 原生 mcpServers；Pi SDK 当前没有等价
- * mcpServers 参数，因此 Proma 在主进程连接用户配置的 MCP server，并把 MCP tools
- * 映射成 Pi customTools。
+ * Pi SDK 当前没有等价 mcpServers 参数，因此 Proma 在主进程连接用户配置的
+ * MCP server，并把 MCP tools 映射成 Pi customTools。
  */
 
 import { createHash } from 'node:crypto'
@@ -19,6 +18,9 @@ import type { TSchema } from 'typebox'
 import { Type } from 'typebox'
 import { createManagedProxyFetch, type ManagedProxyFetch } from '../proxy-fetch'
 import { sanitizeToolResultImageContent } from '../image-content-validation'
+import { classifyNetworkFailure } from '../network/network-errors'
+import { networkMonitor } from '../network/network-monitor'
+import { runWithNetworkRecovery, throwIfNetworkOperationAborted, waitForNetworkOperation, withNetworkAbortSignal } from '../network/network-recovery'
 
 const DEFAULT_MCP_REQUEST_TIMEOUT_MS = 60_000
 const DEFAULT_MCP_STARTUP_TIMEOUT_MS = 30_000
@@ -311,9 +313,17 @@ async function listRequiredMcpTools(
   }
 }
 
-class PiMcpClientManager {
+export class McpToolResultUncertainError extends Error {
+  constructor(cause: unknown) {
+    super('MCP Session 已失效，本次工具结果未确认。未自动重放操作；请先核实实际结果，再决定是否重试。', { cause })
+    this.name = 'McpToolResultUncertainError'
+  }
+}
+
+export class PiMcpClientManager {
   private readonly connections = new Map<string, McpConnectionEntry>()
   private lifecycleGeneration = 0
+  private lifecycleController = new AbortController()
 
   /**
    * 关闭所有活跃的 MCP 连接，释放 stdio 子进程和网络资源。
@@ -321,6 +331,8 @@ class PiMcpClientManager {
    */
   async dispose(): Promise<void> {
     this.lifecycleGeneration += 1
+    this.lifecycleController.abort()
+    this.lifecycleController = new AbortController()
     const entries = [...this.connections.values()]
     this.connections.clear()
     requiredMcpFailureTimestamps.clear()
@@ -337,10 +349,11 @@ class PiMcpClientManager {
   }
 
   async listTools(serverName: string, config: PiMcpServerConfig): Promise<McpToolInfo[]> {
-    return this.executeWithSessionRecovery(serverName, config, undefined, async (connection) => {
+    const signal = this.lifecycleController.signal
+    return runWithNetworkRecovery(() => this.executeWithSessionRecovery(serverName, config, signal, true, async (connection, operationSignal) => {
       if (connection.tools) return connection.tools
       if (!connection.toolsPromise) {
-        connection.toolsPromise = connection.client.listTools(undefined, { timeout: DEFAULT_MCP_REQUEST_TIMEOUT_MS })
+        connection.toolsPromise = connection.client.listTools(undefined, { signal: operationSignal, timeout: DEFAULT_MCP_REQUEST_TIMEOUT_MS })
           .then((result) => {
             connection.tools = result.tools
             return result.tools
@@ -351,15 +364,15 @@ class PiMcpClientManager {
           })
       }
       return connection.toolsPromise
-    })
+    }), { replay: 'read-only', signal })
   }
 
   async callTool(serverName: string, config: PiMcpServerConfig, toolName: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpCallToolResult> {
-    return this.executeWithSessionRecovery(serverName, config, signal, (connection) =>
+    return this.executeWithSessionRecovery(serverName, config, signal, false, (connection, operationSignal) =>
       connection.client.callTool(
         { name: toolName, arguments: args },
         undefined,
-        { signal, timeout: DEFAULT_MCP_REQUEST_TIMEOUT_MS, resetTimeoutOnProgress: true },
+        { signal: operationSignal, timeout: DEFAULT_MCP_REQUEST_TIMEOUT_MS, resetTimeoutOnProgress: true },
       ))
   }
 
@@ -367,45 +380,55 @@ class PiMcpClientManager {
     serverName: string,
     config: PiMcpServerConfig,
     signal: AbortSignal | undefined,
-    operation: (connection: McpConnection) => Promise<T>,
+    allowReplay: boolean,
+    operation: (connection: McpConnection, signal: AbortSignal) => Promise<T>,
   ): Promise<T> {
-    const lifecycleGeneration = this.lifecycleGeneration
-    const lease = await this.acquireConnection(serverName, config)
-    let leaseReleased = false
-    try {
+    return withNetworkAbortSignal([signal, this.lifecycleController.signal], async (operationSignal) => {
+      throwIfNetworkOperationAborted(operationSignal)
+      const lifecycleGeneration = this.lifecycleGeneration
+      const lease = await this.acquireConnection(serverName, config, operationSignal)
+      let leaseReleased = false
       try {
-        return await operation(lease.connection)
-      } catch (error) {
-        if (!this.isRejectedHttpSession(error, lease.connection)) {
-          throw error
-        }
-
-        this.markConnectionStale(lease)
-        await this.releaseConnection(lease)
-        leaseReleased = true
-        if (signal?.aborted || this.lifecycleGeneration !== lifecycleGeneration) throw error
-
-        console.info(`[Pi MCP] MCP 服务器 ${serverName} Session 已失效，正在重新握手`)
-
-        const replacement = await this.acquireConnection(serverName, config)
         try {
-          try {
-            return await operation(replacement.connection)
-          } catch (retryError) {
-            if (this.isRejectedHttpSession(retryError, replacement.connection)) {
-              this.markConnectionStale(replacement)
-            }
-            throw retryError
+          throwIfNetworkOperationAborted(operationSignal)
+          const result = await operation(lease.connection, operationSignal)
+          throwIfNetworkOperationAborted(operationSignal)
+          return result
+        } catch (error) {
+          if (!this.isRejectedHttpSession(error, lease.connection)) {
+            if (allowReplay && classifyNetworkFailure(error, operationSignal).retryable) this.markConnectionStale(lease)
+            throw error
           }
-        } finally {
-          await this.releaseConnection(replacement)
+
+          this.markConnectionStale(lease)
+          await this.releaseConnection(lease)
+          leaseReleased = true
+          throwIfNetworkOperationAborted(operationSignal)
+          if (this.lifecycleGeneration !== lifecycleGeneration) throw error
+          // 无 tools annotations 能证明业务幂等性；Session 拒绝也不能重放 tools/call。
+          if (!allowReplay) throw new McpToolResultUncertainError(error)
+
+          console.info(`[Pi MCP] MCP 服务器 ${serverName} Session 已失效，正在重新握手`)
+
+          const replacement = await this.acquireConnection(serverName, config, operationSignal)
+          try {
+            try {
+              throwIfNetworkOperationAborted(operationSignal)
+              const result = await operation(replacement.connection, operationSignal)
+              throwIfNetworkOperationAborted(operationSignal)
+              return result
+            } catch (retryError) {
+              if (this.isRejectedHttpSession(retryError, replacement.connection)) this.markConnectionStale(replacement)
+              throw retryError
+            }
+          } finally {
+            await this.releaseConnection(replacement)
+          }
         }
+      } finally {
+        if (!leaseReleased) await this.releaseConnection(lease)
       }
-    } finally {
-      if (!leaseReleased) {
-        await this.releaseConnection(lease)
-      }
-    }
+    })
   }
 
   private isRejectedHttpSession(error: unknown, connection: McpConnection): boolean {
@@ -416,7 +439,7 @@ class PiMcpClientManager {
     return error.code === 400 && HTTP_SESSION_REJECTION_PATTERN.test(error.message)
   }
 
-  private async acquireConnection(serverName: string, config: PiMcpServerConfig): Promise<McpConnectionLease> {
+  private async acquireConnection(serverName: string, config: PiMcpServerConfig, signal?: AbortSignal): Promise<McpConnectionLease> {
     const key = `${serverName}:${configHash(config)}`
     let entry = this.connections.get(key)
 
@@ -450,7 +473,7 @@ class PiMcpClientManager {
       return {
         key,
         entry,
-        connection: await entry.promise,
+        connection: await waitForNetworkOperation(entry.promise, signal),
       }
     } catch (error) {
       entry.activeLeases -= 1
@@ -484,10 +507,14 @@ class PiMcpClientManager {
     if (!transport) throw new Error(`无法创建 MCP transport: ${serverName}`)
     const proxyFetch = transportProxyFetches.get(transport)
 
+    const observation = networkMonitor.begin('mcp', `${serverName}:${configHash(config)}`)
+
     const client = new Client({ name: 'proma-pi-agent-mcp-bridge', version: '0.1.0' }, { capabilities: {} })
     try {
       await client.connect(transport, { timeout: getTimeoutMs(config) })
+      networkMonitor.finish(observation, { state: 'reachable' })
     } catch (error) {
+      networkMonitor.finish(observation, { state: 'failed', failureKind: classifyNetworkFailure(error).kind })
       try { await transport.close() } catch { /* connection setup already failed */ }
       await proxyFetch?.close()
       throw error
@@ -499,11 +526,13 @@ class PiMcpClientManager {
     transport.onerror = (error) => {
       previousOnError?.(error)
       if (!closing) {
+        networkMonitor.finish(observation, { state: 'failed', failureKind: classifyNetworkFailure(error).kind })
         console.warn(`[Pi MCP] MCP 服务器 ${serverName} transport error:`, error)
       }
     }
     const previousOnClose = transport.onclose
     transport.onclose = () => {
+      networkMonitor.finish(observation, { state: 'closed' })
       closing = true
       previousOnClose?.()
       onClose()
@@ -513,6 +542,7 @@ class PiMcpClientManager {
       client,
       transport,
       close: async () => {
+        networkMonitor.finish(observation, { state: 'closed' })
         closing = true
         try {
           await transport.close()

@@ -17,7 +17,8 @@ export class PendingPromptSkillActivationTracker {
   private readonly entriesByPrompt = new Map<string, PendingPromptSkillActivation[]>()
 
   register(prompt: string, userMessageUuid: string, activations: SkillActivation[]): number | undefined {
-    if (!prompt || !userMessageUuid || activations.length === 0) return undefined
+    // 无 Skill 的输入也必须保留身份；用于采样分轮，失败入队仍按 token 撤销。
+    if (!prompt || !userMessageUuid) return undefined
 
     const entry: PendingPromptSkillActivation = {
       id: this.nextId++,

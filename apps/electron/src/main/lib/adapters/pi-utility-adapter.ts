@@ -306,6 +306,9 @@ export class PiUtilityAdapter {
       case 'retry':
         pending.input.onRetry?.(callbackPayload?.update as never)
         break
+      case 'user_turn_started':
+        pending.input.onUserTurnStarted?.(String(callbackPayload?.userMessageUuid ?? ''))
+        break
       case 'skill_activated':
         pending.input.onSkillActivated?.(
           (callbackPayload?.activations ?? []) as never,
@@ -326,6 +329,7 @@ function serializeQueryInput(input: PiAgentQueryOptions): Record<string, unknown
     onModelResolved: _onModelResolved,
     onContextWindow: _onContextWindow,
     onRetry: _onRetry,
+    onUserTurnStarted: _onUserTurnStarted,
     onSkillActivated: _onSkillActivated,
     onCodexOAuthCredentialsRefreshed: _onCodexOAuthCredentialsRefreshed,
     onGithubCopilotOAuthCredentialsRefreshed: _onGithubCopilotOAuthCredentialsRefreshed,

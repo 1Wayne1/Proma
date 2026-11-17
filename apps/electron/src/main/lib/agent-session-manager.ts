@@ -1,3 +1,4 @@
+import { notifyWorkspaceResourcesChanged } from './workspace-resource-events'
 /**
  * Agent 会话管理器
  *
@@ -292,6 +293,7 @@ function writeIndex(index: AgentSessionsIndex): void {
   try {
     writeJsonFileAtomic(indexPath, index)
     cacheIndex(index)
+    notifyWorkspaceResourcesChanged()
   } catch (error) {
     console.error('[Agent 会话] 写入索引文件失败:', error)
     throw new Error('写入 Agent 会话索引失败')

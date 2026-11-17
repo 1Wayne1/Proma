@@ -1,3 +1,5 @@
+import { isWithinTurnRoot } from './turn-changes/paths'
+import { assertNoProjectMutation, canonicalProjectPath, projectPathsOverlap } from './project-mutation-guard'
 import { randomUUID } from 'node:crypto'
 import {
   TERMINAL_IPC_CHANNELS,
@@ -29,6 +31,7 @@ const terminals = new Map<string, TerminalState>()
 const pendingTerminals = new Map<string, Promise<TerminalState>>()
 const cancelledPendingTerminalIds = new Set<string>()
 const terminalSessionOwners = new Map<string, string>()
+const terminalCwds = new Map<string, string>()
 const terminalOutputBuffers = new Map<string, TerminalOutputBuffer>()
 const agentTerminals = new Map<string, AgentTerminalRecord>()
 const MAX_REPLAY_CHARS = 1_000_000
@@ -54,6 +57,7 @@ function initialize(): void {
   })
   terminalRuntimeClient.onExit((event) => {
     terminals.delete(event.terminalId)
+    terminalCwds.delete(event.terminalId)
     const agentTerminal = agentTerminals.get(event.terminalId)
     if (agentTerminal) {
       // Agent 可在命令退出后读取结果；缓冲会随显式关闭或会话回收一并释放。
@@ -77,6 +81,9 @@ export async function createTerminal(
   const pending = pendingTerminals.get(input.terminalId)
   if (pending) return pending
   const cwd = options.strictCwd ? requireTerminalCwd(input.cwd) : resolveTerminalCwd(input.cwd)
+
+  assertNoProjectMutation([cwd])
+  terminalCwds.set(input.terminalId, cwd)
 
   // Record ownership before spawning so a concurrent session deletion can cancel it.
   terminalSessionOwners.set(input.terminalId, input.sessionId)
@@ -102,6 +109,7 @@ export async function createTerminal(
       pendingTerminals.delete(input.terminalId)
       cancelledPendingTerminalIds.delete(input.terminalId)
       terminalSessionOwners.delete(input.terminalId)
+      terminalCwds.delete(input.terminalId)
       terminalOutputBuffers.delete(input.terminalId)
     },
   )
@@ -132,6 +140,7 @@ export function killTerminal(terminalId: string): void {
   if (pendingTerminals.has(terminalId)) cancelledPendingTerminalIds.add(terminalId)
   terminals.delete(terminalId)
   terminalSessionOwners.delete(terminalId)
+  terminalCwds.delete(terminalId)
   terminalOutputBuffers.delete(terminalId)
   agentTerminals.delete(terminalId)
   terminalRuntimeClient.kill(terminalId)
@@ -262,6 +271,7 @@ export async function stopAllTerminals(): Promise<void> {
   pendingTerminals.clear()
   cancelledPendingTerminalIds.clear()
   terminalSessionOwners.clear()
+  terminalCwds.clear()
   terminalOutputBuffers.clear()
   agentTerminals.clear()
   await terminalRuntimeClient.stop()
@@ -296,4 +306,16 @@ function validateTerminalId(terminalId: string): void {
 
 function normalizeDimension(value: number): number {
   return Number.isFinite(value) ? Math.max(1, Math.min(500, Math.floor(value))) : 1
+}
+
+
+/** 包括尚未完成创建的终端；终端退出后不再占用项目操作边界。 */
+export function hasTerminalsInProject(root: string): boolean {
+  return [...terminalCwds.values()].some(cwd => projectPathsOverlap(root, cwd))
+}
+
+export function releaseExitedTerminalsInProject(root: string): void {
+  for (const terminal of [...agentTerminals.values()]) {
+    if (terminal.status === 'exited' && isWithinTurnRoot(canonicalProjectPath(root), canonicalProjectPath(terminal.cwd))) closeAgentTerminal(terminal.sessionId, terminal.terminalId)
+  }
 }

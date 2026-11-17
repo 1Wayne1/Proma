@@ -7,6 +7,7 @@
 
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
 import type { Dispatcher, RequestInfo, RequestInit } from 'undici'
+import { createObservedFetch } from './network/network-monitor'
 
 export interface ManagedProxyFetch {
   fetch: typeof globalThis.fetch
@@ -17,15 +18,16 @@ export interface ManagedProxyFetch {
  * 创建可释放的请求级代理 fetch。短生命周期操作（例如 MCP 验证）必须在 finally
  * 调用 close，长期 MCP 连接则由 connection 生命周期持有并在 close 时释放。
  */
-export function createManagedProxyFetch(proxyUrl?: string): ManagedProxyFetch {
+export function createManagedProxyFetch(proxyUrl?: string, observe = true): ManagedProxyFetch {
   const normalizedProxyUrl = proxyUrl?.trim()
-  if (!normalizedProxyUrl) return { fetch, close: async () => undefined }
+  const wrap = (fetcher: typeof globalThis.fetch): typeof globalThis.fetch => observe ? createObservedFetch(fetcher) : fetcher
+  if (!normalizedProxyUrl) return { fetch: wrap(fetch), close: async () => undefined }
 
   const dispatcher = new ProxyAgent(normalizedProxyUrl)
   return {
-    fetch: ((input: RequestInfo | URL, init?: RequestInit) => {
+    fetch: wrap(((input: RequestInfo | URL, init?: RequestInit) => {
       return undiciFetch(input as RequestInfo, { ...init, dispatcher })
-    }) as unknown as typeof globalThis.fetch,
+    }) as unknown as typeof globalThis.fetch),
     close: async () => {
       await (dispatcher as Dispatcher & { close?: () => Promise<void> }).close?.().catch(() => undefined)
     },
@@ -41,12 +43,12 @@ export function createManagedProxyFetch(proxyUrl?: string): ManagedProxyFetch {
 export function createProxyFetch(proxyUrl: string): typeof globalThis.fetch {
   const dispatcher = new ProxyAgent(proxyUrl)
 
-  return ((input: RequestInfo | URL, init?: RequestInit) => {
+  return createObservedFetch(((input: RequestInfo | URL, init?: RequestInit) => {
     return undiciFetch(input as RequestInfo, {
       ...init,
       dispatcher,
     })
-  }) as unknown as typeof globalThis.fetch
+  }) as unknown as typeof globalThis.fetch)
 }
 
 /**
@@ -58,5 +60,5 @@ export function getFetchFn(proxyUrl?: string): typeof globalThis.fetch {
   if (proxyUrl?.trim()) {
     return createProxyFetch(proxyUrl.trim())
   }
-  return fetch
+  return createObservedFetch(fetch)
 }
