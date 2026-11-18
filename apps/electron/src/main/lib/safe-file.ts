@@ -100,7 +100,7 @@ export function readJsonFileSafe<T>(filePath: string): T | null {
     try {
       const raw = readFileSync(filePath, 'utf-8')
       if (raw.trim().length > 0) {
-        return JSON.parse(raw) as T
+        return JSON.parse(raw.trimStart()) as T
       }
     } catch {
       console.warn(`[数据恢复] 主索引文件损坏: ${filePath}`)
@@ -112,7 +112,7 @@ export function readJsonFileSafe<T>(filePath: string): T | null {
     try {
       const raw = readFileSync(tmpPath, 'utf-8')
       if (raw.trim().length > 0) {
-        const parsed = JSON.parse(raw) as T
+        const parsed = JSON.parse(raw.trimStart()) as T
         // .tmp 有效 → 提升为主文件
         renameSync(tmpPath, filePath)
         console.log(`[数据恢复] 从 .tmp 文件恢复: ${filePath}`)
@@ -130,7 +130,7 @@ export function readJsonFileSafe<T>(filePath: string): T | null {
     try {
       const raw = readFileSync(bakPath, 'utf-8')
       if (raw.trim().length > 0) {
-        const parsed = JSON.parse(raw) as T
+        const parsed = JSON.parse(raw.trimStart()) as T
         // 用 .bak 恢复主文件（跳过备份，避免用损坏的主文件覆盖好的 .bak）
         writeJsonFileAtomic(filePath, parsed as object, true)
         console.log(`[数据恢复] 从 .bak 文件恢复: ${filePath}`)

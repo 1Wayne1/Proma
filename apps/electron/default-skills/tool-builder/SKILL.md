@@ -1,7 +1,7 @@
 ---
 name: tool-builder
 description: 交互式创建和管理 Chat 模式的自定义 HTTP 工具。当用户想要创建新的 API 工具、配置 Chat 工具、添加自定义工具、管理自定义工具、或说"帮我创建一个 XX 工具"时使用此 Skill。也适用于调试、修复或删除已有的自定义工具。
-version: "1.0.1"
+version: "1.0.2"
 ---
 # Tool Builder
 
@@ -22,7 +22,7 @@ version: "1.0.1"
 
 ### 2. 构建配置
 
-根据收集的信息构建工具配置 JSON。配置文件位于 `~/.proma/chat-tools.json`。
+根据收集的信息构建工具配置 JSON。安装版默认使用 `~/.proma/chat-tools.json`。先确认当前实例的数据目录。此配置只控制 Chat 的 HTTP 工具，Pi Agent 的工具注册单独管理。
 
 #### 配置文件结构
 
@@ -30,8 +30,8 @@ version: "1.0.1"
 {
   "toolStates": {
     "memory": { "enabled": true },
-    "web-search": { "enabled": false },
-    "custom-weather": { "enabled": true }
+    "agent-mode-recommend": { "enabled": true },
+    "custom-weather": { "enabled": false }
   },
   "toolCredentials": {},
   "customTools": [
@@ -89,18 +89,16 @@ version: "1.0.1"
 
 ### 3. 写入配置
 
-操作步骤：
-1. 读取 `~/.proma/chat-tools.json`（如不存在则创建）
-2. 将新工具追加到 `customTools` 数组（按 `id` 去重）
-3. 在 `toolStates` 中添加 `{ "enabled": true }` 使其默认启用
-4. 写回文件（保持 JSON 格式化）
+1. 读取现有配置，仅修改用户指定的工具 ID。旧 `toolCredentials`、其他工具、状态和不认识的扩展字段原样保留。解析失败时停止写入，保留原文件供恢复。凭据值留在本机，不在回复或日志中展示。
+2. 新工具加入 `customTools`，默认关闭。用户可以在 Chat 的工具选择器中启用。修改同 ID 的已有工具时保留其原开关和顺序。
+3. 修改文件时先保留可恢复的副本，再原子替换。示例给出字段形状，已有配置使用逐项合并。HTTP 运行时使用 `httpConfig.headers`，旧 `toolCredentials` 仅供兼容保留。如果服务需要密钥，请用户在本机填写。
 
 写入后应用会自动检测文件变化并刷新工具列表。
 
 ### 4. 测试引导
 
 告知用户：
-- "工具已创建并启用，请切换到 Chat 模式测试"
+- "工具已创建，请切换到 Chat 模式，在工具选择器中启用后测试"
 - "在 Chat 输入框左下角的工具选择器中应该能看到新工具"
 - "试着问一个需要用到这个工具的问题"
 - "如果有问题，回到 Agent 模式告诉我，我帮你调试"
@@ -118,7 +116,7 @@ version: "1.0.1"
 
 ### 6. 删除工具
 
-从 `customTools` 数组中移除对应工具，同时删除 `toolStates` 中的条目。
+用户明确删除时，只移除指定自定义工具及该 ID 对应的 `toolStates`、`toolCredentials` 条目。
 
 ## 完整示例：天气查询工具
 

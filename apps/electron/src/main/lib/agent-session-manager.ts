@@ -11,8 +11,8 @@ import { notifyWorkspaceResourcesChanged } from './workspace-resource-events'
 
 import { readFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, readdirSync, createReadStream, createWriteStream, statSync, type WriteStream } from 'node:fs'
 import { createInterface } from 'node:readline'
-import { writeJsonFileAtomic, writeTextFileAtomic, readJsonFileSafe } from './safe-file'
-import { randomUUID } from 'node:crypto'
+import { writeJsonFileAtomic, writeTextFileAtomic, writeBytesFileAtomic, readJsonFileSafe } from './safe-file'
+import { createHash, randomUUID } from 'node:crypto'
 import { rmSyncWithRetry, renameWithRetry } from './fs-retry'
 import { isAbsolute, join } from 'node:path'
 import {
@@ -46,7 +46,7 @@ import type {
   SessionWorkbenchLayout,
 } from '@proma/shared'
 import { isCodexSpeed, migratePermissionMode, mergeSkillActivations, findBestSearchMatch, insertTopSearchResult } from '@proma/shared'
-import { getConversationMessages } from './conversation-manager'
+import { getCompleteConversationMessages } from './conversation-manager'
 // 旧格式 → SDKMessage 的转换逻辑下沉到 @proma/session-core 作为唯一真源，避免主进程与渲染层各存一份。
 import { convertLegacyMessage } from '@proma/session-core'
 import { assertEnabledModelForChannel } from './agent-model-selection'
@@ -257,6 +257,10 @@ function readIndex(): AgentSessionsIndex {
 
   const data = readJsonFileSafe<AgentSessionsIndex>(indexPath)
   if (data) {
+    data.version ??= 1
+    if (!Array.isArray(data.sessions) || !Number.isInteger(data.version) || data.version < 0 || data.version > INDEX_VERSION) {
+      throw new Error('Agent 会话索引版本或结构无法识别，已保留原文件')
+    }
     const permissionModeMigrated = migrateLegacyPermissionMode(data)
     const thinkingDefaultMigrated = migrateLegacyOpenAIThinkingDefault(data)
     const retiredClaudeRuntimeMigrated = migrateRetiredClaudeRuntime(data)
@@ -267,6 +271,15 @@ function readIndex(): AgentSessionsIndex {
       codexSpeedMigrated = true
     }
     if (permissionModeMigrated || thinkingDefaultMigrated || retiredClaudeRuntimeMigrated || codexSpeedMigrated || data.version < INDEX_VERSION) {
+      // 普通 .bak 会被后续保存轮换。迁移前按源字节保留一份可独立恢复的原件。
+      const source = readFileSync(indexPath)
+      const digest = createHash('sha256').update(source).digest('hex')
+      const backup = `${indexPath}.pre-v${data.version}-${digest}.bak`
+      if (existsSync(backup)) {
+        if (!readFileSync(backup).equals(source)) throw new Error('Agent 索引迁移备份不一致，已停止迁移')
+      } else {
+        writeBytesFileAtomic(backup, source, { exclusive: true, mode: 0o600 })
+      }
       data.version = INDEX_VERSION
       // writeIndex 会按写入后的文件状态刷新缓存。
       writeIndex(data)
@@ -284,6 +297,7 @@ function readIndex(): AgentSessionsIndex {
     }
     return data
   }
+  if (existsSync(indexPath) || existsSync(indexPath + '.bak')) throw new Error('Agent 会话索引无法恢复，已保留原文件')
   return {
     version: INDEX_VERSION,
     sessions: [],
@@ -823,32 +837,37 @@ export function moveSessionToWorkspace(sessionId: string, targetWorkspaceId: str
  * 工具活动、推理、附件等 Chat 特有字段不迁移。
  */
 export function migrateChatToAgentSession(conversationId: string, agentSessionId: string): void {
-  const chatMessages = getConversationMessages(conversationId)
+  const chatMessages = getCompleteConversationMessages(conversationId)
 
   if (chatMessages.length === 0) {
     console.log(`[Agent 会话] Chat 对话无消息，跳过迁移 (${conversationId})`)
     return
   }
 
-  let count = 0
-  for (const cm of chatMessages) {
-    // 仅迁移 user 和 assistant 消息
-    if (cm.role !== 'user' && cm.role !== 'assistant') continue
-    if (!cm.content.trim()) continue
-
-    const agentMsg: AgentMessage = {
-      id: randomUUID(),
-      role: cm.role,
-      content: cm.content,
-      createdAt: cm.createdAt,
-      model: cm.role === 'assistant' ? cm.model : undefined,
-    }
-
-    appendAgentMessage(agentSessionId, agentMsg)
-    count++
+  const target = getAgentSessionMeta(agentSessionId)
+  if (!target || isAgentSessionDeleting(agentSessionId)) throw new Error('目标 Agent 会话不可用')
+  if (target.legacyTranscript) throw new Error('历史会话为只读，请选择 Pi 会话')
+  const path = getAgentSessionMessagesPath(agentSessionId)
+  const previous = existsSync(path) ? readFileSync(path, 'utf8') : ''
+  interface ImportedMessage extends AgentMessage {
+    chatImport: { version: 1; conversationId: string; messageId: string }
   }
-
-  console.log(`[Agent 会话] 已迁移 ${count} 条消息到 Agent 会话 (${conversationId} → ${agentSessionId})`)
+  const existing = parseJsonlStrict<Partial<ImportedMessage> | null>(previous.split('\n').filter(line => line.trim()), '读取迁移目标')
+  const imported = new Set(existing.flatMap(row => row?.chatImport?.version === 1 && row.chatImport.conversationId === conversationId
+    ? [row.chatImport.messageId] : []))
+  const additions: ImportedMessage[] = []
+  for (const cm of chatMessages) {
+    if ((cm.role !== 'user' && cm.role !== 'assistant') || !cm.content.trim() || imported.has(cm.id)) continue
+    additions.push({ id: randomUUID(), role: cm.role, content: cm.content, createdAt: cm.createdAt,
+      model: cm.role === 'assistant' ? cm.model : undefined,
+      chatImport: { version: 1, conversationId, messageId: cm.id } })
+    imported.add(cm.id)
+  }
+  if (!additions.length) return
+  const separator = previous && !previous.endsWith('\n') ? '\n' : ''
+  writeTextFileAtomic(path, previous + separator + additions.map(message => JSON.stringify(message)).join('\n') + '\n')
+  updateAgentSessionMeta(agentSessionId, { archived: false })
+  console.log(`[Agent 会话] 已导入 ${additions.length} 条 Chat 消息`)
 }
 
 /**

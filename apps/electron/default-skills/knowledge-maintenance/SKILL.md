@@ -1,7 +1,7 @@
 ---
 name: knowledge-maintenance
-description: 维护 Proma 项目地图与长期协作知识。当用户说“记住”“以后这样做”“你又忘了”、用户直接表达或重复出现的稳定偏好/决策/纠错，或当前任务发现项目 AGENTS.md 已过时时使用。将事实路由到项目根 AGENTS.md、Proma workspace AGENTS.md、memory/、Skill 或 Context；历史会话仅在用户明确授权后分批作为补证据。不要将会话流水账或单次推断写入长期知识。
-version: "1.0.3"
+description: 维护 Proma 项目地图与长期协作知识。当用户说“记住”“以后这样做”“你又忘了”、用户直接表达或重复出现的稳定偏好/决策/纠错，或当前任务发现项目 AGENTS.md 已过时时使用。将事实路由到项目根 AGENTS.md、Proma workspace AGENTS.md、全局画像、项目记忆、Skill 或 Context；历史会话仅在用户明确授权后分批作为补证据。不要将会话流水账或单次推断写入长期知识。
+version: "1.0.4"
 ---
 
 # 知识维护
@@ -14,17 +14,27 @@ version: "1.0.3"
 | --- | --- |
 | 当前项目如何运行、架构/目录/命令/验证/边界 | 项目根 `AGENTS.md` |
 | Proma 执行环境、工作区流程、项目入口指针（不列已安装 Skills） | Proma workspace `AGENTS.md` |
-| 用户画像、协作偏好、纠错、经验、决策理由 | workspace `memory/` 的主题 Markdown |
+| 用户明确希望跨项目复用的偏好 | `global` 范围的 `user_profile.md` |
+| 当前项目的经验、纠错、决策理由 | `project` 范围的 `MEMORY.md` 和 `memory/` 主题 Markdown |
 | 重复的可执行步骤 | Skill |
 | 长调研、证据正文、设计报告 | 项目 Context / 本地文档 |
 | 当前任务临时状态 | 会话工作台 |
 
 项目根 AGENTS.md 与 workspace AGENTS.md 都应最小更新、保留用户内容；项目事实不双写。优先维护 `<!-- proma:... -->` 区块。
 
+## 使用长期记忆工具
+
+`MemoryRead` 和 `MemoryWrite` 接收 `scope: "global"` 或 `scope: "project"`，由主进程绑定本轮已授权的目标。仅提供全局范围时，请用户先进入相应项目再维护项目记忆。工具不可用时给出拟议修改，等待用户回到有权限的交互会话。
+
+1. 先用 `MemoryRead` 的 `list`、`search` 或 `inspect` 查找相关记录。读取主题可传 `{"scope":"project","action":"inspect","path":"memory/decisions.md"}`。截断的预览仅用于定位，取得完整正文后再编辑。
+2. 创建首版用 `MemoryWrite` 的 `initialize` 和 `content`。更新用 `update`，传入同一路径、完整合并后的 `content` 和刚读到的 `expectedRevision`。文档尚未创建时其 revision 为 `null`。发生冲突时重读并合并用户修改。
+3. 恢复前先 `history`、`restorePreview`，再用 `restore` 提交选定的历史 `revision` 与当前 `expectedRevision`。归档用 `archive` 并传当前 `expectedRevision`。全局写入、归档和恢复遵循工具的授权提示。
+4. 导入旧记忆先用 `MemoryRead` 的 `migrationPreview` 展示候选和冲突。经确认后用 `MemoryWrite` 的 `migrate` 并传 `planId`。保留旧文件。只有用户明确要求关联项目指令时，才先 `instructionPreview` 再 `linkInstruction`。
+
 ## Memory 的组织
 
 - `MEMORY.md` 仅做主题索引和路由，不承载长正文；每个有效主题文件都必须有一条简洁索引，主题被合并、迁移或淘汰时同步更新索引，避免悬空入口。
-- 按证据创建主题文件；常见但非强制主题包括 `user-profile.md`、`collaboration.md`、`lessons.md`、`decisions.md`。
+- 按证据创建主题文件；常见但非强制主题包括 `collaboration.md`、`lessons.md`、`decisions.md`。
 - 不为凑结构创建空文件，不把一次性过程或未经验证推断写入。
 - 更新前先读索引及相关主题，修订过时结论而不是追加冲突条目。
 - **保留时间语境**：时间敏感、会随状态更新，或记录具有后续判断价值的阶段性进展时，在对应记忆正文相邻标注事实/状态的发生、生效或截至时间（至少日期；日内顺序、截止点或时区会影响判断时写明时间和时区）。不得用文件修改时间替代；稳定且不随时间变化的事实无需额外加时间戳。
@@ -42,7 +52,7 @@ version: "1.0.3"
 ## 维护流程
 
 1. 完成当前任务后，只有发现稳定且会影响未来判断的事实时才维护；不要为了收集资料提问。
-2. 对明确、稳定且与既有记录不冲突的最小增量，直接写入相应 Memory 主题并在完成后简短说明。不得把此类写入包装成“是否要记住/是否要更新”的预先确认问题。
+2. 对明确、稳定且与既有记录不冲突的最小增量，通过相应的记忆工具提交增量，遵循其权限流程，并在完成后简短说明。
 3. 只有删除或大段覆盖既有内容、出现冲突、需要从单次行为做不确定推断，或可能记录敏感个人信息时，才先以 1–3 条候选内容说明事实、位置和影响，并取得确认。
 4. 用户跳过、拒绝或只答一部分时停止追问，继续正常服务。
 5. 历史会话只能在用户明确授权后读取：先按元信息选至多 3 个高信号会话，按需读局部，证据足够即停止；不得全量扫描。

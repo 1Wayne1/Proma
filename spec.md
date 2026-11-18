@@ -2,13 +2,13 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | 1.0.19 |
+| 文档版本 | 1.0.20 |
 | 制定日期 | 2026-11-16 |
 | 状态 | S1—S4 已形成提交基线，M1 和 S5 的 macOS 验收通过。S6-02 窗口预览已在 Windows x64 实测，macOS arm64 待实机验收 |
 | 开发分支 | `dev/new-version-features` |
 | 源码基线 | 桌面应用 `0.19.58`；提交 `86d9dfb511db4c1e3ffded3b6c3e312996f50cbf` |
 | 参考安装版 | `D:\Program Files\Proma`，桌面应用 `0.22.80` |
-| 当前版本 | M1 基线桌面应用 `0.19.72`，S5-01 基线 `0.19.74`，S5-02 基线 `0.19.75`，S6-02 `0.19.78`，共享包 `0.1.81` |
+| 当前版本 | M1 基线桌面应用 `0.19.72`，S5-01 基线 `0.19.74`，S5-02 基线 `0.19.75`，S6-02 `0.19.78`，S7 兼容工作区 `0.19.79`，共享包 `0.1.81` |
 | 首要平台 | Windows；共享逻辑需维持 macOS/Linux 的既有能力 |
 | 接手入口 | [当前交接记录](docs/plans/2026-11-17-local-upgrade-handoff.md)，包含 M1 和 S5 的 macOS 验收结果 |
 
@@ -366,8 +366,8 @@ S0 基线与前置调查
 | --- | --- |
 | `cua-driver-cli` | 驱动协议验证后新增，与实际 Windows 能力一致 |
 | `proma-self-control` | S5 工具通过验证后新增 |
-| `proma-build-in-proma-app` | 调查依赖，仅本地可实现部分后置纳入；不可暗中依赖云 API |
-| `jev-use` | 用途和依赖未确认，调查后另定范围 |
+| `proma-build-in-proma-app` | 提供本地应用的预览和 Present 文件交付流程 |
+| `jev-use` | 参考安装版使用单独配置的 Jev 服务选择下一步，再调用 Cua。外部服务接入留待单独确定范围 |
 | `proma-cloud-sdk` / `proma-web-search` / `proma-gpt-image-25` | 本期排除依赖 Proma 后端的实现 |
 | 当前 `knowledge-maintenance` / `tool-builder` | 不因参考包缺失而删除；按新记忆和工具接口更新说明 |
 | 现有 collaboration/automation/browser/Office Skills | 工具契约变化时同步更新并递增版本 |
@@ -877,3 +877,11 @@ Windows x64 与 macOS arm64 使用固定版本驱动的窗口 PNG。界面消费
 Windows 隔离 Electron 使用真实驱动、正式 preload 和 React 预览卡片显示同一测试窗口的两帧不同画面，停止后卡片与截图清除。21 项定向测试、六个工作区类型检查及 Electron 构建通过。Mac 的系统授权、原生窗口预览和多屏 DPI 仍待实机验证。
 
 Windows x64 在隔离目录生成了未签名的 NSIS 冒烟包，已核对打包资源中 `default-skills/cua-driver-cli/SKILL.md` 与源码的 SHA-256 一致。该次冒烟沿用了本机 Electron 和现有原生模块，安装升级及签名发布验收待 S7。
+
+## 31. S7 默认 Skills 和旧数据兼容（2026-11-18）
+
+S6-02 基线为 `755dbc1b`。桌面应用 `0.19.79` 更新了 `knowledge-maintenance`、`in-app-browser` 和 `tool-builder`，增加纯本地的 `proma-build-in-proma-app`。已有工作区按版本升级并保留停用选择。
+
+旧 Chat 的只读展示支持带 BOM 的 JSONL 和局部坏行。删除、截断和导入会检查历史完整性。从 Chat 导入同一 Agent 会话时，新增记录带版本及来源消息标识，重复操作只补充新消息。导入保留源 Chat 的附件、推理和工具历史。旧 Agent 索引在迁移前按原始字节留存独立备份，普通保存继续轮换日常备份。旧 Chat 工具配置保留扩展字段、凭据和已有开关，配置损坏时写操作保留原文件。
+
+本阶段使用隔离目录验证默认 Skill 升级与旧数据读写。Windows 和 macOS 安装升级验收按原安排暂缓。

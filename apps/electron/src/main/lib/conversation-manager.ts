@@ -6,10 +6,10 @@
  * - 消息存储：~/.proma/conversations/{id}.jsonl（JSONL 格式，逐行追加）
  */
 
-import { readFileSync, writeFileSync, appendFileSync, existsSync, unlinkSync, createReadStream } from 'node:fs'
+import { readFileSync, openSync, closeSync, fstatSync, readSync, appendFileSync, existsSync, unlinkSync, createReadStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
-import { writeJsonFileAtomic, readJsonFileSafe } from './safe-file'
+import { writeJsonFileAtomic, writeTextFileAtomic, readJsonFileSafe } from './safe-file'
 import { randomUUID } from 'node:crypto'
 import {
   getConversationsIndexPath,
@@ -72,7 +72,8 @@ const conversationSearchIndexCache = new Map<string, ConversationSearchIndex>()
 function readIndex(): ConversationsIndex {
   const indexPath = getConversationsIndexPath()
   const data = readJsonFileSafe<ConversationsIndex>(indexPath)
-  if (data) return data
+  if (data && Array.isArray(data.conversations) && (data.version === undefined || data.version === 0 || data.version === INDEX_VERSION)) return data
+  if (existsSync(indexPath) || existsSync(indexPath + '.bak')) throw new Error('Chat 对话索引无法识别，已保留原文件')
   return { version: INDEX_VERSION, conversations: [] }
 }
 
@@ -134,29 +135,43 @@ export function createConversation(
 }
 
 /**
- * 读取对话的所有消息
- *
- * 逐行读取 JSONL 文件，解析每行为 ChatMessage。
- *
- * @param id 对话 ID
- * @returns 消息列表
+ * 旧版 Windows 文本允许第一行带 BOM。读取正文时保留未识别的消息字段。
  */
-export function getConversationMessages(id: string): ChatMessage[] {
+function parseChatLine(line: string): ChatMessage {
+  const message: ChatMessage | null = JSON.parse(line.trimStart())
+  if (!message || typeof message.id !== 'string' || typeof message.role !== 'string' || typeof message.content !== 'string') {
+    throw new Error('消息缺少 id、role 或 content')
+  }
+  return message
+}
+
+function readChatLines(id: string): string[] {
   const filePath = getConversationMessagesPath(id)
+  if (!existsSync(filePath)) return []
+  return readFileSync(filePath, 'utf8').split('\n').filter(line => line.trim())
+}
 
-  if (!existsSync(filePath)) {
-    return []
+function parseChatHistory(lines: string[], strict: boolean): ChatMessage[] {
+  const messages: ChatMessage[] = []
+  let skipped = 0
+  for (const line of lines) {
+    try { messages.push(parseChatLine(line)) }
+    catch {
+      if (strict) throw new Error('Chat 历史包含无法读取的消息，已保留原记录')
+      skipped++
+    }
   }
+  if (skipped) console.warn(`[对话管理] 已跳过 ${skipped} 条无法读取的历史消息`)
+  return messages
+}
 
-  try {
-    const raw = readFileSync(filePath, 'utf-8')
-    const lines = raw.split('\n').filter((line) => line.trim())
+export function getConversationMessages(id: string): ChatMessage[] {
+  return parseChatHistory(readChatLines(id), false)
+}
 
-    return lines.map((line) => JSON.parse(line) as ChatMessage)
-  } catch (error) {
-    console.error(`[对话管理] 读取消息失败 (${id}):`, error)
-    return []
-  }
+/** 迁移及历史修改须完整读取来源，防止将损坏记录当作空记录。 */
+export function getCompleteConversationMessages(id: string): ChatMessage[] {
+  return parseChatHistory(readChatLines(id), true)
 }
 
 /**
@@ -170,30 +185,17 @@ export function getConversationMessages(id: string): ChatMessage[] {
  * @returns 最近的消息列表 + 总数 + 是否还有更多
  */
 export function getRecentMessages(id: string, limit: number): RecentMessagesResult {
-  const filePath = getConversationMessagesPath(id)
-
-  if (!existsSync(filePath)) {
-    return { messages: [], total: 0, hasMore: false }
-  }
-
+  const lines = readChatLines(id)
+  const count = Math.max(0, Math.trunc(limit))
+  const tail = count ? lines.slice(-count) : []
   try {
-    const raw = readFileSync(filePath, 'utf-8')
-    const lines = raw.split('\n').filter((line) => line.trim())
-    const total = lines.length
-
-    // 如果总数不超过 limit，直接返回全部
-    if (total <= limit) {
-      const messages = lines.map((line) => JSON.parse(line) as ChatMessage)
-      return { messages, total, hasMore: false }
-    }
-
-    // 只解析尾部 limit 行
-    const recentLines = lines.slice(-limit)
-    const messages = recentLines.map((line) => JSON.parse(line) as ChatMessage)
-    return { messages, total, hasMore: true }
-  } catch (error) {
-    console.error(`[对话管理] 读取最近消息失败 (${id}):`, error)
-    return { messages: [], total: 0, hasMore: false }
+    const messages = tail.map(parseChatLine)
+    return { messages, total: lines.length, hasMore: lines.length > messages.length }
+  } catch {
+    // 尾部损坏才扫描全文，用较早的可读消息补足本页。
+    const all = parseChatHistory(lines, false)
+    const messages = count ? all.slice(-count) : []
+    return { messages, total: all.length, hasMore: all.length > messages.length }
   }
 }
 
@@ -223,7 +225,7 @@ export async function getConversationMessagesAround(
       if (!line.trim()) continue
       let message: ChatMessage
       try {
-        message = JSON.parse(line) as ChatMessage
+        message = parseChatLine(line)
       } catch {
         continue
       }
@@ -261,8 +263,14 @@ export function appendMessage(id: string, message: ChatMessage): void {
   const filePath = getConversationMessagesPath(id)
 
   try {
-    const line = JSON.stringify(message) + '\n'
-    appendFileSync(filePath, line, 'utf-8')
+    const fd = openSync(filePath, 'a+')
+    try {
+      const size = fstatSync(fd).size
+      const last = Buffer.alloc(1)
+      if (size) readSync(fd, last, 0, 1, size - 1)
+      const separator = size && last[0] !== 10 ? '\n' : ''
+      appendFileSync(fd, separator + JSON.stringify(message) + '\n', 'utf8')
+    } finally { closeSync(fd) }
 
     // 追加消息时更新 updatedAt，若已归档则自动恢复活跃
     const index = readIndex()
@@ -292,7 +300,7 @@ export function saveConversationMessages(id: string, messages: ChatMessage[]): v
 
   try {
     const content = messages.map((msg) => JSON.stringify(msg)).join('\n') + (messages.length > 0 ? '\n' : '')
-    writeFileSync(filePath, content, 'utf-8')
+    writeTextFileAtomic(filePath, content)
   } catch (error) {
     console.error(`[对话管理] 保存消息失败 (${id}):`, error)
     throw new Error('保存消息失败')
@@ -379,7 +387,7 @@ export function deleteConversation(id: string): void {
  * @returns 更新后的消息列表
  */
 export function deleteMessage(conversationId: string, messageId: string): ChatMessage[] {
-  const messages = getConversationMessages(conversationId)
+  const messages = getCompleteConversationMessages(conversationId)
   const targetMessage = messages.find((msg) => msg.id === messageId)
   const filtered = messages.filter((msg) => msg.id !== messageId)
 
@@ -388,6 +396,7 @@ export function deleteMessage(conversationId: string, messageId: string): ChatMe
     return messages
   }
 
+  saveConversationMessages(conversationId, filtered)
   // 删除消息关联的附件文件
   if (targetMessage?.attachments) {
     for (const attachment of targetMessage.attachments) {
@@ -395,7 +404,6 @@ export function deleteMessage(conversationId: string, messageId: string): ChatMe
     }
   }
 
-  saveConversationMessages(conversationId, filtered)
   console.log(`[对话管理] 已删除消息: ${messageId} (对话 ${conversationId})`)
   return filtered
 }
@@ -416,7 +424,7 @@ export function truncateMessagesFrom(
   messageId: string,
   preserveFirstMessageAttachments = false,
 ): ChatMessage[] {
-  const messages = getConversationMessages(conversationId)
+  const messages = getCompleteConversationMessages(conversationId)
   const startIndex = messages.findIndex((msg) => msg.id === messageId)
 
   if (startIndex === -1) {
@@ -427,6 +435,7 @@ export function truncateMessagesFrom(
   const kept = messages.slice(0, startIndex)
   const removed = messages.slice(startIndex)
 
+  saveConversationMessages(conversationId, kept)
   // 删除被截断消息关联的附件文件
   removed.forEach((msg, idx) => {
     if (!msg.attachments || msg.attachments.length === 0) return
@@ -438,7 +447,6 @@ export function truncateMessagesFrom(
     })
   })
 
-  saveConversationMessages(conversationId, kept)
   console.log(`[对话管理] 已从消息截断: ${messageId} (对话 ${conversationId})`)
   return kept
 }
@@ -639,7 +647,7 @@ async function buildConversationSearchIndex(
       if (!line.trim()) continue
       let msg: ChatMessage
       try {
-        msg = JSON.parse(line) as ChatMessage
+        msg = parseChatLine(line)
       } catch {
         continue
       }
@@ -682,7 +690,7 @@ async function findMatchesInJsonl(
       if (!line.trim()) continue
       let msg: ChatMessage
       try {
-        msg = JSON.parse(line) as ChatMessage
+        msg = parseChatLine(line)
       } catch {
         continue
       }

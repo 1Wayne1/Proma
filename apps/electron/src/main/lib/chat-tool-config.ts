@@ -23,7 +23,7 @@ const DEFAULT_CONFIG: ChatToolsFileConfig = {
 /**
  * 读取工具配置
  */
-export function getChatToolsConfig(): ChatToolsFileConfig {
+function readConfig(forWrite: boolean): ChatToolsFileConfig {
   const filePath = getChatToolsConfigPath()
 
   if (!existsSync(filePath)) {
@@ -32,22 +32,34 @@ export function getChatToolsConfig(): ChatToolsFileConfig {
 
   try {
     const raw = readFileSync(filePath, 'utf-8')
-    const data = JSON.parse(raw) as Partial<ChatToolsFileConfig>
+    const data = JSON.parse(raw.replace(/^\uFEFF/, '')) as Partial<ChatToolsFileConfig>
+    const isMap = (value: unknown) => typeof value === 'object' && value !== null && !Array.isArray(value)
+    if (!isMap(data) || (data.toolStates != null && !isMap(data.toolStates)) ||
+        (data.toolCredentials != null && !isMap(data.toolCredentials)) ||
+        (data.customTools != null && (!Array.isArray(data.customTools) || data.customTools.some(tool => !isMap(tool) || typeof tool.id !== 'string')))) {
+      throw new Error('配置结构无效')
+    }
     return {
+      ...data,
       toolStates: { ...DEFAULT_CONFIG.toolStates, ...data.toolStates },
       toolCredentials: data.toolCredentials ?? {},
       customTools: data.customTools ?? [],
     }
-  } catch (error) {
-    console.error('[Chat 工具配置] 读取失败:', error)
+  } catch {
+    if (forWrite) throw new Error('Chat 工具配置无法解析，已保留原文件')
+    console.error('[Chat 工具配置] 读取失败')
     return structuredClone(DEFAULT_CONFIG)
   }
+}
+
+export function getChatToolsConfig(): ChatToolsFileConfig {
+  return readConfig(false)
 }
 
 /**
  * 保存工具配置
  */
-export function saveChatToolsConfig(config: ChatToolsFileConfig): void {
+function saveChatToolsConfig(config: ChatToolsFileConfig): void {
   const filePath = getChatToolsConfigPath()
   try {
     writeJsonFileAtomic(filePath, config)
@@ -62,8 +74,8 @@ export function saveChatToolsConfig(config: ChatToolsFileConfig): void {
  * 更新单个工具的开关状态
  */
 export function updateToolState(toolId: string, state: ChatToolState): void {
-  const config = getChatToolsConfig()
-  config.toolStates[toolId] = state
+  const config = readConfig(true)
+  config.toolStates[toolId] = { ...config.toolStates[toolId], ...state }
   saveChatToolsConfig(config)
 }
 
@@ -71,11 +83,15 @@ export function updateToolState(toolId: string, state: ChatToolState): void {
  * 添加自定义工具
  */
 export function addCustomTool(meta: ChatToolMeta): void {
-  const config = getChatToolsConfig()
-  // 去重
-  config.customTools = config.customTools.filter((t) => t.id !== meta.id)
-  config.customTools.push(meta)
-  config.toolStates[meta.id] = { enabled: false }
+  const config = readConfig(true)
+  const index = config.customTools.findIndex(tool => tool.id === meta.id)
+  if (index === -1) config.customTools.push(meta)
+  else {
+    // 保留扩展字段。可选的已知字段仍允许编辑者清空。
+    config.customTools[index] = { ...config.customTools[index], icon: undefined, systemPromptAppend: undefined,
+      httpConfig: undefined, ...meta }
+  }
+  config.toolStates[meta.id] ??= { enabled: false }
   saveChatToolsConfig(config)
 }
 
@@ -83,7 +99,7 @@ export function addCustomTool(meta: ChatToolMeta): void {
  * 删除自定义工具
  */
 export function deleteCustomTool(toolId: string): void {
-  const config = getChatToolsConfig()
+  const config = readConfig(true)
   config.customTools = config.customTools.filter((t) => t.id !== toolId)
   delete config.toolStates[toolId]
   delete config.toolCredentials[toolId]
