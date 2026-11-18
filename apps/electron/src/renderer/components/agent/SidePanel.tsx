@@ -170,10 +170,11 @@ interface PersistentFileScrollAreaProps {
   className: string
   children: React.ReactNode
   autoRevealTs?: number
+  selfControl: 'scroll-project-files' | 'scroll-session-files'
 }
 
 /** 保存 Files Tab 的滚动位置，并在文件树异步恢复内容后再次定位。 */
-function PersistentFileScrollArea({ stateKey, className, children, autoRevealTs = 0 }: PersistentFileScrollAreaProps): React.ReactElement {
+function PersistentFileScrollArea({ stateKey, className, children, autoRevealTs = 0, selfControl }: PersistentFileScrollAreaProps): React.ReactElement {
   const scrollTopMap = useAtomValue(fileBrowserScrollTopMapAtom)
   const setScrollTopMap = useSetAtom(fileBrowserScrollTopMapAtom)
   const scrollTop = scrollTopMap.get(stateKey) ?? 0
@@ -270,7 +271,7 @@ function PersistentFileScrollArea({ stateKey, className, children, autoRevealTs 
     }
   }, [setScrollTopMap, stateKey])
 
-  return <div ref={containerRef} className={className}>{children}</div>
+  return <div ref={containerRef} data-proma-self-control={selfControl} className={className}>{children}</div>
 }
 
 function getFileBrowserScrollStateKey(
@@ -1511,6 +1512,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
           {isSession ? '会话文件' : '项目文件'}
         </h3>
         <PersistentFileScrollArea
+          selfControl={isSession ? 'scroll-session-files' : 'scroll-project-files'}
           stateKey={getFileBrowserScrollStateKey(sessionId, scope, roots)}
           autoRevealTs={activeAutoRevealTs}
           className="min-h-0 flex-1 overflow-y-auto scrollbar-thin pt-1"
@@ -1659,6 +1661,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
         {sessionPath ? (
           <>
             <FileSearchBar
+              allowSelfControl
               workspaceFilesPath={isProjectRootUnavailable ? null : workspaceFilesPath}
               sessionPath={sessionPath}
               sessionAttachedDirs={attachedDirs}
@@ -1708,7 +1711,10 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
                 {renderFileSourceContent('session')}
               </div>
             ) : (
-              <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin pt-1">
+              <div
+                data-proma-self-control={fileSourceFilter === 'session' ? 'scroll-session-files' : 'scroll-project-files'}
+                className="flex-1 min-h-0 overflow-y-auto scrollbar-thin pt-1"
+              >
                 {/* 拖拽引用提示：引用块样式，左侧竖线 + 缩进，与下方文件列表内容左对齐 */}
                 <div className="mb-1.5 ml-4 border-l-2 border-primary/40 pl-2 text-[11px] leading-4 text-foreground/75">
                   支持拖拽文件或文件夹到输入框，实现引用

@@ -502,14 +502,14 @@ function createWindow(): void {
     },
     ...titleBarOptions,
   })
-  setStoredMainWindow(mainWindow)
+  const isDev = !app.isPackaged
+  const rendererPath = join(__dirname, 'renderer', 'index.html')
+  const rendererEntryUrl = isDev ? 'http://127.0.0.1:5173' : pathToFileURL(rendererPath).toString()
+  setStoredMainWindow(mainWindow, rendererEntryUrl)
   installWindowsZoomInFallback(mainWindow)
   browserController.setOwnerWindow(mainWindow)
 
   // Load the renderer
-  const isDev = !app.isPackaged
-  const rendererPath = join(__dirname, 'renderer', 'index.html')
-  const rendererEntryUrl = isDev ? 'http://127.0.0.1:5173' : pathToFileURL(rendererPath).toString()
   const loadMainRenderer = (): Promise<void> => {
     if (!mainWindow || mainWindow.isDestroyed()) {
       return Promise.reject(new Error('主窗口已销毁'))

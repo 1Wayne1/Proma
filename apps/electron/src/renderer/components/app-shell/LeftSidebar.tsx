@@ -262,14 +262,16 @@ interface WorkspaceComponentSidebarEntryProps {
   active: boolean
   onClick: () => void
   badge?: React.ReactNode
+  selfControl?: 'open-todos' | 'open-calendar'
 }
 
 /** 左侧项目级组件的单行入口；每项只打开一个对应的右侧 Tab。 */
-function WorkspaceComponentSidebarEntry({ label, icon, active, onClick, badge }: WorkspaceComponentSidebarEntryProps): React.ReactElement {
+function WorkspaceComponentSidebarEntry({ label, icon, active, onClick, badge, selfControl }: WorkspaceComponentSidebarEntryProps): React.ReactElement {
   return (
     <button
       type="button"
       aria-label={label}
+      data-proma-self-control={selfControl}
       onClick={onClick}
       className={cn(
         'group flex w-full items-center justify-between rounded-md px-3 py-2 text-[13px] transition-colors duration-100 titlebar-no-drag',
@@ -3549,6 +3551,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
         {productivityTools.todosEnabled && (
           <WorkspaceComponentSidebarEntry
             label="Todo"
+            selfControl="open-todos"
             icon={<ListTodo size={16} />}
             active={isWorkspaceComponentActive('todos')}
             onClick={() => handleOpenPlanningComponent('todos')}
@@ -3557,6 +3560,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
         {productivityTools.calendarEnabled && (
           <WorkspaceComponentSidebarEntry
             label="日程"
+            selfControl="open-calendar"
             icon={<CalendarDays size={16} />}
             active={isWorkspaceComponentActive('calendar')}
             onClick={() => handleOpenPlanningComponent('calendar')}

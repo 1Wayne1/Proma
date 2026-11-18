@@ -13,6 +13,8 @@ import { FileTypeIcon } from './FileTypeIcon'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { fileBrowserAutoRevealAtom } from '@/atoms/agent-atoms'
 import type { FileIndexEntry } from '@proma/shared'
+import { isPromaSelfSearchKey, isPromaSelfSearchText, PROMA_SELF_FILE_SEARCH, PROMA_SELF_SEARCH_FILL_EVENT, PROMA_SELF_SEARCH_PRESS_EVENT } from '../../../types/proma-self-control'
+import type { PromaSelfSearchKey } from '../../../types/proma-self-control'
 import { hasMixedFileSources } from './file-search-sources'
 
 interface FileSearchBarProps {
@@ -30,6 +32,7 @@ interface FileSearchBarProps {
   /** 当前 session ID，用于文件自动定位 */
   sessionId?: string
   onFilePreview?: (filePath: string) => void
+  allowSelfControl?: boolean
 }
 
 function sortSearchResults(entries: FileIndexEntry[], query: string): FileIndexEntry[] {
@@ -59,6 +62,7 @@ export function FileSearchBar({
   placeholder = '搜索文件...',
   sessionId,
   onFilePreview,
+  allowSelfControl = false,
 }: FileSearchBarProps): React.ReactElement | null {
   const [query, setQuery] = React.useState('')
   const [results, setResults] = React.useState<FileIndexEntry[]>([])
@@ -194,25 +198,43 @@ export function FileSearchBar({
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [isOpen])
 
-  const handleKeyDown = React.useCallback((e: React.KeyboardEvent) => {
-    // 忽略 IME 组合输入期间的按键（如中文输入法敲回车确认候选词）
-    if (e.nativeEvent.isComposing) return
-
-    if (e.key === 'Escape') {
-      e.preventDefault()
+  const navigateSearch = React.useCallback((key: PromaSelfSearchKey) => {
+    if (key === 'Escape') {
       setIsOpen(false)
       dismissedRef.current = true
       inputRef.current?.blur()
       return
     }
-    if (e.key === 'ArrowDown') {
-      e.preventDefault()
-      setSelectedIndex((prev) => (results.length > 0 ? (prev + 1) % results.length : 0))
-      return
+    const step = key === 'ArrowDown' ? 1 : -1
+    setSelectedIndex(prev => results.length > 0 ? (prev + step + results.length) % results.length : 0)
+  }, [results.length])
+
+  React.useEffect(() => {
+    const input = inputRef.current
+    if (!allowSelfControl || !hasAnyRoot || !input) return
+    // 控制器只向这个输入框发单独的事件，避免按键冒泡触发用户自定义的应用快捷键。
+    const fill = (event: Event): void => {
+      const value: unknown = (event as CustomEvent<unknown>).detail
+      if (isPromaSelfSearchText(value)) { setQuery(value); event.preventDefault() }
     }
-    if (e.key === 'ArrowUp') {
+    const press = (event: Event): void => {
+      const key: unknown = (event as CustomEvent<unknown>).detail
+      if (isPromaSelfSearchKey(key)) { navigateSearch(key); event.preventDefault() }
+    }
+    input.addEventListener(PROMA_SELF_SEARCH_FILL_EVENT, fill)
+    input.addEventListener(PROMA_SELF_SEARCH_PRESS_EVENT, press)
+    return () => {
+      input.removeEventListener(PROMA_SELF_SEARCH_FILL_EVENT, fill)
+      input.removeEventListener(PROMA_SELF_SEARCH_PRESS_EVENT, press)
+    }
+  }, [allowSelfControl, hasAnyRoot, navigateSearch])
+
+  const handleKeyDown = React.useCallback((e: React.KeyboardEvent) => {
+    // 忽略 IME 组合输入期间的按键（如中文输入法敲回车确认候选词）
+    if (e.nativeEvent.isComposing) return
+    if (isPromaSelfSearchKey(e.key)) {
       e.preventDefault()
-      setSelectedIndex((prev) => (results.length > 0 ? (prev - 1 + results.length) % results.length : 0))
+      navigateSearch(e.key)
       return
     }
     if (e.key === 'Enter' && isOpen && results.length > 0) {
@@ -228,7 +250,7 @@ export function FileSearchBar({
         inputRef.current?.blur()
       }
     }
-  }, [results, selectedIndex, isOpen, onFilePreview, sessionId, setAutoReveal, resolveAbsolutePath])
+  }, [results, selectedIndex, isOpen, onFilePreview, sessionId, setAutoReveal, resolveAbsolutePath, navigateSearch])
 
   const handleClick = React.useCallback((entry: FileIndexEntry) => {
     const absPath = resolveAbsolutePath(entry)
@@ -259,6 +281,7 @@ export function FileSearchBar({
         <input
           ref={inputRef}
           type="text"
+          data-proma-self-control={allowSelfControl ? PROMA_SELF_FILE_SEARCH : undefined}
           className="flex-1 bg-transparent text-[11px] outline-none placeholder:text-muted-foreground/40"
           placeholder={placeholder}
           value={query}
