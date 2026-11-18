@@ -27,6 +27,7 @@ import { getTaskGetStatusLabel, parseTaskGetResult, type ParsedTaskGetResult } f
 import { parseTaskListResult, type ParsedTaskListItem } from './tool-result-renderers/task-list-result'
 import { formatDuration } from './AgentMessages'
 import { useSmoothStream } from '@proma/ui'
+import { PROMA_SELF_SCREENSHOT_TOOL } from '../../../types/proma-self-control'
 import type {
   SDKContentBlock,
   SDKMessage,
@@ -43,10 +44,11 @@ import type {
 interface ToolResultData {
   result?: string
   isError?: boolean
+  screenshot?: string
 }
 
 /** 在 allMessages 中查找匹配 toolUseId 的工具结果 */
-function useToolResult(toolUseId: string, allMessages: SDKMessage[]): ToolResultData | null {
+function useToolResult(toolUseId: string, toolName: string, allMessages: SDKMessage[]): ToolResultData | null {
   return React.useMemo(() => {
     for (const msg of allMessages) {
       if (msg.type !== 'user') continue
@@ -67,13 +69,21 @@ function useToolResult(toolUseId: string, allMessages: SDKMessage[]): ToolResult
                 .map((c) => c.text)
                 .join('\n')
             }
-            return { result, isError: resultBlock.is_error }
+            const screenshot = !resultBlock.is_error && toolName === PROMA_SELF_SCREENSHOT_TOOL && Array.isArray(resultBlock.content)
+              ? resultBlock.content.find((item: unknown): item is { data: string } => {
+                if (!item || typeof item !== 'object') return false
+                const { type, mimeType, data } = item as Record<string, unknown>
+                return type === 'image' && mimeType === 'image/png' && typeof data === 'string' &&
+                  data.startsWith('iVBORw0KGgo') && data.length <= 2 * 1024 * 1024
+              })?.data
+              : undefined
+            return { result, isError: resultBlock.is_error, screenshot }
           }
         }
       }
     }
     return null
-  }, [toolUseId, allMessages])
+  }, [toolUseId, toolName, allMessages])
 }
 
 // ===== useSubAgentMeta Hook =====
@@ -335,7 +345,7 @@ interface ToolUseBlockProps {
 
 function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed = false, childBlocks, basePath, isStreaming }: ToolUseBlockProps): React.ReactElement {
   const [expanded, setExpanded] = React.useState(false)
-  const toolResult = useToolResult(block.id, allMessages)
+  const toolResult = useToolResult(block.id, block.name, allMessages)
   const resultText = toolResult?.result
   const isError = toolResult?.isError === true
   const shouldShowResult = !!resultText
@@ -354,7 +364,9 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
   // Agent/Task 子代理内容默认折叠
   const [childrenExpanded, setChildrenExpanded] = React.useState(false)
 
-  const phrase = getToolPhrase(block.name, block.input)
+  const phrase = block.name === PROMA_SELF_SCREENSHOT_TOOL
+    ? { label: 'Proma 脱敏截图', loadingLabel: '正在生成 Proma 脱敏截图' }
+    : getToolPhrase(block.name, block.input)
   const ToolIcon = getToolIcon(block.name)
   const toolKindLabel = block.name.startsWith('mcp__') ? block.name.split('__').slice(1).join(' / ') : block.name
   const showToolKindLabel = shouldShowToolKindLabel(block.name, block.input, toolKindLabel, phrase.label)
@@ -380,6 +392,19 @@ function ToolUseBlock({ block, allMessages, animate = false, index = 0, dimmed =
 
   // 子代理工具调用统计
   const childToolCount = childBlocks?.filter((b) => b.type === 'tool_use').length ?? 0
+
+  if (toolResult?.screenshot) {
+    return (
+      <figure className="w-fit max-w-full overflow-hidden rounded-lg border border-border bg-muted/30">
+        <img
+          className="block max-h-96 max-w-full object-contain"
+          alt="Proma 脱敏截图"
+          src={`data:image/png;base64,${toolResult.screenshot}`}
+        />
+        <figcaption className="px-3 py-2 text-xs text-muted-foreground">Proma 脱敏截图</figcaption>
+      </figure>
+    )
+  }
 
   // ===== Agent/Task 工具：特殊渲染 =====
   if (isAgentTool) {

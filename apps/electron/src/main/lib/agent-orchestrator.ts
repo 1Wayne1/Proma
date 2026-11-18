@@ -1,5 +1,7 @@
 import { buildPiMemoryTools } from './adapters/pi-memory-tools'
 import { buildPiPresentTool } from './adapters/pi-present-tool'
+import { buildPiPromaSelfTools, isPromaSelfTool } from './adapters/pi-proma-self-tools'
+import type { PromaSelfForegroundAccess } from './proma-self-access'
 import { presentService } from './present-runtime'
 import { assertNoProjectMutation, registerProjectActivity } from './project-mutation-guard'
 import type { ProjectActivityLease } from './project-mutation-guard'
@@ -229,6 +231,7 @@ export class AgentOrchestrator {
   private adapter: AgentProviderAdapter
   private eventBus: AgentEventBus
   private activeSessions = new Map<string, number>()
+  private readonly selfControlRuns = new Map<string, AbortController>()
   private readonly projectActivities = new Map<string, ProjectActivityLease>()
   private activeSessionStartedAt = new Map<string, number>()
   private nextRunGenerationBySession = new Map<string, number>()
@@ -692,7 +695,7 @@ export class AgentOrchestrator {
   async sendMessage(
     input: AgentRunInput,
     callbacks: SessionCallbacks,
-    extensions: { piCustomTools?: ToolDefinition[] } = {},
+    extensions: { piCustomTools?: ToolDefinition[]; selfControl?: PromaSelfForegroundAccess } = {},
   ): Promise<void> {
     const { sessionId, userMessage, rawUserMessage, userMessageUuid, channelId, modelId, workspaceId: requestedWorkspaceId, additionalDirectories, permissionModeOverride, mentionedSkills, mentionedMcpServers, mentionedSessionIds, mentionedTodoIds, mentionedCalendarEventIds, automationContext, retryOfErrorUuid } = input
     // Capture the focus once per turn. Later UI focus changes must not rewrite this reply's attribution.
@@ -949,6 +952,9 @@ export class AgentOrchestrator {
     })
 
     const activityKey = JSON.stringify([sessionId, runGeneration])
+    const foreground = extensions.selfControl
+    const selfControlLifetime = foreground && new AbortController()
+    if (selfControlLifetime) this.selfControlRuns.set(sessionId, selfControlLifetime)
     let projectActivity: ProjectActivityLease | undefined
     let turnChangesRun: TurnChangesRun | undefined
     let turnChangesFailed = false
@@ -956,6 +962,8 @@ export class AgentOrchestrator {
       if (turnChangesRun) await finishTurnChangesRun(turnChangesRun, completion)
     }
     const releaseActiveRun = (): void => {
+      selfControlLifetime?.abort()
+      if (this.selfControlRuns.get(sessionId) === selfControlLifetime) this.selfControlRuns.delete(sessionId)
       projectActivity?.release()
       if (this.projectActivities.get(activityKey) === projectActivity) this.projectActivities.delete(activityKey)
       // 在发送 STREAM_COMPLETE 前释放 active slot，避免渲染进程已进入空闲态、
@@ -1305,6 +1313,10 @@ export class AgentOrchestrator {
 
       /** Plan 模式是否已被 Agent 进入（初始 plan 模式时天然为 true，其他模式需 EnterPlanMode 触发） */
       let planModeEntered = initialPermissionMode === 'plan'
+      const canControlProma = (): boolean => !!foreground?.isCurrent() && !selfControlLifetime?.signal.aborted &&
+        !automationContext && (runTriggeredBy === undefined || runTriggeredBy === 'user') &&
+        !planModeEntered && getPermissionMode() !== 'plan' && this.activeSessions.get(sessionId) === runGeneration &&
+        !isAgentSessionDeleting(sessionId)
 
       const syncPlanModeFromToolUse = (toolName: string): void => {
         if (toolName === 'EnterPlanMode') {
@@ -1324,6 +1336,11 @@ export class AgentOrchestrator {
       // 动态 canUseTool：每次调用读取当前权限模式，支持运行中切换
       const canUseTool = async (toolName: string, input: Record<string, unknown>, options: CanUseToolOptions): Promise<PermissionResult> => {
         const currentMode = getPermissionMode()
+        if (isPromaSelfTool(toolName)) {
+          return canControlProma() && !options.signal.aborted
+            ? { behavior: 'allow', updatedInput: input }
+            : { behavior: 'deny', message: '当前运行没有 Proma 自身界面操作权限' }
+        }
 
         // ── 参数校验守卫（所有模式、所有工具，优先于权限检查） ──
         const validationFailure = validateToolInput(toolName, input)
@@ -1668,7 +1685,12 @@ export class AgentOrchestrator {
           this.activeSessions.get(sessionId) !== runGeneration || isAgentSessionDeleting(sessionId)) return
         return { sessionId, turnId: presentTurnId }
       })
-      const piCustomTools = [...piBuiltinTools, ...piMcpTools, ...memoryTools, presentTool, ...(extensions.piCustomTools ?? [])]
+      const selfTools = buildPiPromaSelfTools(foreground && selfControlLifetime ? {
+        sessionId,
+        isCurrent: canControlProma,
+        signal: AbortSignal.any([foreground.signal, selfControlLifetime.signal]),
+      } : undefined)
+      const piCustomTools = [...piBuiltinTools, ...piMcpTools, ...memoryTools, presentTool, ...selfTools, ...(extensions.piCustomTools ?? [])]
       if (workspaceId && workspaceSlug && changesTurnId) {
         turnChangesRun = createTurnChangesRun({
           owner: { sessionId, workspaceId, turnId: changesTurnId },
@@ -2366,6 +2388,8 @@ export class AgentOrchestrator {
    */
   stop(sessionId: string, stopBeforeRun = false): void | Promise<void> {
     const runGeneration = this.activeSessions.get(sessionId)
+    this.selfControlRuns.get(sessionId)?.abort()
+    this.selfControlRuns.delete(sessionId)
     const releaseStopActivity = this.projectActivities.get(JSON.stringify([sessionId, runGeneration]))?.retain()
     const changeRuns = abortSessionTurnChanges(sessionId, runGeneration)
     this.activeSessions.delete(sessionId)
@@ -2481,6 +2505,8 @@ export class AgentOrchestrator {
       console.log(`[Agent 编排] 正在中止所有活跃会话 (${this.activeSessions.size} 个)...`)
     }
     // 即便 activeSessions 为空，也要调 dispose 清理可能残留的 pidMap / 子进程
+    for (const lifetime of this.selfControlRuns.values()) lifetime.abort()
+    this.selfControlRuns.clear()
     abortAllTurnChanges()
     this.adapter.dispose()
     void drainTurnChanges().catch(() => console.warn('[逐轮变更] 退出收束未完成'))

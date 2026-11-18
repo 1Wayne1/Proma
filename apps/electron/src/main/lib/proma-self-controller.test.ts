@@ -153,6 +153,15 @@ describe('Proma 自身界面控制器', () => {
     expect(isAttached()).toBe(false)
   })
 
+  test('Given 同一会话开始新一轮 When 复用上一轮控件引用 Then 拒绝动作', async () => {
+    const { controller, clicks } = fixture()
+    const firstRun = { ...user, observationOwner: {} }
+    const nextRun = { ...user, observationOwner: {} }
+    const observation = await controller.observe(firstRun)
+    await expect(controller.click(nextRun, observation.generation, observation.controls[0]!.reference)).rejects.toThrow('引用已失效')
+    expect(clicks).toEqual([])
+  })
+
   test('Given 操作仍在等待 CDP When 重入并取消 Then 拒绝重入且迟到响应不点击', async () => {
     const { controller, blockFrame, clicks, selectors, isAttached } = fixture()
     const observed = await controller.find(user, 'Todo')

@@ -2,6 +2,7 @@ import * as React from 'react'
 import { ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getToolDisplayName, getToolIcon } from './tool-utils'
+import { PROMA_SELF_SCREENSHOT_TOOL } from '../../../types/proma-self-control'
 import type {
   SDKContentBlock,
   SDKToolUseBlock,
@@ -95,10 +96,20 @@ export function buildAssistantTurnRenderItems(
 }
 
 function buildProcessGroupItems(blocks: SDKContentBlock[]): AssistantTurnRenderItem[] {
-  return [{
-    type: 'process-group',
-    items: blocks.map((block, index) => ({ block, index })),
-  }]
+  const items: AssistantTurnRenderItem[] = []
+  let group: IndexedContentBlock[] = []
+  for (const [index, block] of blocks.entries()) {
+    const item = { block, index }
+    if (block.type === 'tool_use' && (block as SDKToolUseBlock).name === PROMA_SELF_SCREENSHOT_TOOL) {
+      if (group.length) items.push({ type: 'process-group', items: group })
+      group = []
+      items.push({ type: 'block', item })
+    } else {
+      group.push(item)
+    }
+  }
+  if (group.length) items.push({ type: 'process-group', items: group })
+  return items
 }
 
 /**

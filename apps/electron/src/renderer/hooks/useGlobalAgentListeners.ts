@@ -66,7 +66,7 @@ import {
   playNotificationSoundForType,
 } from '@/atoms/notifications'
 import { appModeAtom } from '@/atoms/app-mode'
-import { tabsAtom, activeTabIdAtom, activeSessionIdAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
+import { tabsAtom, activeTabIdAtom, activeSessionIdAtom, visibleAgentStreamSessionAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom } from '@/atoms/agent-atoms'
 import { channelsAtom } from '@/atoms/chat-atoms'
@@ -2134,10 +2134,8 @@ export function useGlobalAgentListeners(): void {
     window.addEventListener('focus', onWindowFocus)
 
     const syncVisibleAgentStreamSession = (): void => {
-      const sessionId = store.get(activeSessionIdAtom)
-      const activeTab = store.get(tabsAtom).find((tab) => tab.id === store.get(activeTabIdAtom))
-      const visibleAgentSessionId = activeTab?.type === 'agent' || activeTab?.type === 'preview'
-        ? sessionId
+      const visibleAgentSessionId = document.visibilityState === 'visible'
+        ? store.get(visibleAgentStreamSessionAtom)
         : null
       // 开发时 renderer HMR 可能先于 preload/main 重启；缺少新 IPC 不应让整个应用白屏。
       const setVisibleAgentStreamSession = window.electronAPI.setVisibleAgentStreamSession
@@ -2146,12 +2144,14 @@ export function useGlobalAgentListeners(): void {
       }
     }
     syncVisibleAgentStreamSession()
-    const unsubscribeVisibleSession = store.sub(activeSessionIdAtom, syncVisibleAgentStreamSession)
+    const unsubscribeVisibleSession = store.sub(visibleAgentStreamSessionAtom, syncVisibleAgentStreamSession)
+    document.addEventListener('visibilitychange', syncVisibleAgentStreamSession)
 
     return () => {
       cleanupEvent()
       streamEventBatcher.dispose()
       unsubscribeVisibleSession()
+      document.removeEventListener('visibilitychange', syncVisibleAgentStreamSession)
       cleanupComplete()
       cleanupError()
       cleanupTitleUpdated()

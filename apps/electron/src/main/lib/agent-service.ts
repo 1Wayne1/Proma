@@ -13,7 +13,7 @@
 import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { mkdir as mkdirAsync, writeFile as writeFileAsync } from 'node:fs/promises'
-import type { WebContents } from 'electron'
+import type { WebContents, WebFrameMain } from 'electron'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { AGENT_IPC_CHANNELS, MAX_ATTACHMENT_SIZE } from '@proma/shared'
 import type {
@@ -42,7 +42,9 @@ import { AgentEventBus } from './agent-event-bus'
 import { AgentOrchestrator } from './agent-orchestrator'
 import { getAgentSessionWorkspacePath } from './config-paths'
 import { getAgentWorkspaceBySlug, getProjectFilesPath } from './agent-workspace-manager'
-import { getMainWindow } from './main-window-store'
+import { getMainWindow, getMainWindowRenderer } from './main-window-store'
+import { PromaSelfForegroundSessions } from './proma-self-access'
+import type { PromaSelfForegroundAccess } from './proma-self-access'
 import { getLocalProjectRootStatus } from './project-root-health'
 import { getAgentSessionMeta, markAgentSessionDeleting, updateAgentSessionMeta } from './agent-session-manager'
 import { setAgentStopper, setHeadlessAgentRunner } from './agent-headless-runner-registry'
@@ -77,8 +79,8 @@ import('./agent-collaboration-tools').then(({ registerCollaborationEventBus }) =
  * 队列接力或 renderer 重载后被新 run 接管的投递目标。
  */
 const streamRoutes = new AgentStreamRouteRegistry<WebContents>()
-/** 每个 renderer 当前可见的 Agent 会话；仅该会话维持 20fps partial。 */
-const visibleAgentSessionByWebContents = new WeakMap<WebContents, string | null>()
+/** 当前可见会话决定流式优先级及自身操作授权。 */
+const visibleAgentSessions = new PromaSelfForegroundSessions<WebContents>()
 const streamForwarder = new AgentStreamForwarder()
 
 /**
@@ -100,8 +102,12 @@ function attachWebContentsCleanup(wc: WebContents): void {
     for (const sessionIdToClear of streamRoutes.markTargetDestroyed(wc)) {
       streamForwarder.clear(sessionIdToClear)
     }
-    visibleAgentSessionByWebContents.delete(wc)
+    visibleAgentSessions.set(wc, null)
   })
+  wc.on('did-start-navigation', ({ isMainFrame }) => {
+    if (isMainFrame) visibleAgentSessions.set(wc, null)
+  })
+  wc.on('render-process-gone', () => visibleAgentSessions.set(wc, null))
 }
 
 function registerWebContents(sessionId: string, wc: WebContents) {
@@ -218,7 +224,7 @@ eventBus.use((sessionId, payload, next) => {
       streamForwarder.forward(
         { sessionId, payload } as AgentStreamEvent,
         (event) => wc.send(AGENT_IPC_CHANNELS.STREAM_EVENT, event),
-        visibleAgentSessionByWebContents.get(wc) === sessionId,
+        visibleAgentSessions.get(wc) === sessionId,
       )
     } catch (err) {
       console.error(`[EventBus] wc.send 失败: sessionId=${sessionId}, payload.kind=${(payload as Record<string, unknown>)?.kind}`, err)
@@ -233,12 +239,13 @@ eventBus.use((sessionId, payload, next) => {
 /** renderer 切换标签时更新流式优先级；切入会话立即 flush 等待中的后台快照。 */
 export function setVisibleAgentSession(webContents: WebContents, sessionId: string | null): void {
   rebindActiveAgentStreams(webContents)
-  const previousSessionId = visibleAgentSessionByWebContents.get(webContents)
+  attachWebContentsCleanup(webContents)
+  const previousSessionId = visibleAgentSessions.get(webContents)
   if (previousSessionId && previousSessionId !== sessionId) {
     // 切出后将已排队的前台帧按后台频率重排，避免继续以 20fps 发送。
     streamForwarder.reprioritize(previousSessionId, false)
   }
-  visibleAgentSessionByWebContents.set(webContents, sessionId)
+  visibleAgentSessions.set(webContents, sessionId)
   if (sessionId) streamForwarder.promote(sessionId)
 }
 
@@ -251,6 +258,25 @@ export interface AgentRunExtensions {
   piCustomTools?: ToolDefinition[]
 }
 
+/** IPC 接收时绑定当前页面和可见会话，异步预检后仍只能使用同一次授权。 */
+export function capturePromaSelfForeground(
+  input: AgentSendInput,
+  webContents: WebContents,
+  senderFrame: WebFrameMain | null,
+): PromaSelfForegroundAccess | undefined {
+  return visibleAgentSessions.grant(webContents, {
+    sessionId: input.sessionId,
+    trustedMainFrame: !!senderFrame && !webContents.isDestroyed() && senderFrame === webContents.mainFrame,
+    triggeredBy: input.triggeredBy,
+    hasAutomationContext: !!input.automationContext,
+  }, () => {
+    if (webContents.isDestroyed() || webContents.isLoadingMainFrame() || webContents.mainFrame !== senderFrame) return false
+    const target = getMainWindowRenderer()
+    return !!target && target.window.webContents === webContents && target.window.isVisible() &&
+      !target.window.isMinimized() && webContents.getURL() === target.entryUrl
+  })
+}
+
 /**
  * 运行 Agent 并流式推送事件到渲染进程
  *
@@ -259,8 +285,13 @@ export interface AgentRunExtensions {
 export async function runAgent(
   input: AgentRunInput,
   webContents: WebContents,
+  foreground?: PromaSelfForegroundAccess,
 ): Promise<void> {
   const route = registerWebContents(input.sessionId, webContents)
+  const selfControl = foreground && {
+    signal: foreground.signal,
+    isCurrent: () => foreground.isCurrent() && streamRoutes.getTargetIfOwner(input.sessionId, route.ownerId) === webContents,
+  }
   // deferred queue runs carry their queue id as an internal extension.
   const queueMessageId = (input as Partial<AgentDeferredQueueMessageInput>).queueMessageId
   // 开始新一轮执行时清除"完成未确认"与持久化草稿标记。
@@ -347,7 +378,7 @@ export async function runAgent(
           })
         }
       },
-    })
+    }, { selfControl })
   } catch (err) {
     console.error('[Agent 服务] runAgent 未处理异常:', err)
     const errorMessage = err instanceof Error ? err.message : '未知错误'

@@ -4,6 +4,7 @@ import type { PromaSelfSearchKey } from '../../types/proma-self-control'
 export interface PromaSelfExecution {
   sessionId: string
   source: 'user' | 'automation' | 'delegation' | 'external'
+  observationOwner?: object
   isCurrent: () => boolean
   signal?: AbortSignal
 }

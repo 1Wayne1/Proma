@@ -8,6 +8,7 @@
 
 import { atom } from 'jotai'
 import { atomWithStorage } from 'jotai/utils'
+import { activeViewAtom } from './active-view'
 import {
   streamingConversationIdsAtom,
 } from './chat-atoms'
@@ -120,6 +121,13 @@ export const activeTabAtom = atom<TabItem | null>((get) => {
 export const activeSessionIdAtom = atom<string | null>((get) => {
   const activeTab = get(activeTabAtom)
   return activeTab?.sessionId ?? null
+})
+
+/** 全屏工作区视图会遮住会话，即使所选标签的 sessionId 没变。 */
+export const visibleAgentStreamSessionAtom = atom<string | null>((get) => {
+  if (get(activeViewAtom) !== 'conversations') return null
+  const tab = get(activeTabAtom)
+  return tab?.type === 'agent' || tab?.type === 'preview' ? tab.sessionId : null
 })
 
 /** 标签是否在流式输出中（派生，从现有流式 atoms 计算） */

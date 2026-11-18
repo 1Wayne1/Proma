@@ -1,12 +1,12 @@
 # Proma 非云功能改造交接
 
-更新日期为 2026-11-18（Asia/Shanghai），交接记录版本为 1.0.9。
+更新日期为 2026-11-18（Asia/Shanghai），交接记录版本为 1.0.10。
 
 ## 接手先看
 
 1. 在当前 `dev/new-version-features` 工作区修改工程。2026-11-18 的续作目录是 macOS 的 `/Users/weibo/projects/Proma`，下文的 Windows 路径为此前实施和证据位置。
-2. 先读根目录 [AGENTS.md](../../AGENTS.md)，再读 [spec.md](../../spec.md) 第 2、3、10、13、15、26—27 节及本文。运行 `git status` 核对当前工作区。
-3. **从 S5-02 接手。** S5-01 主窗口控制器已通过 macOS 原生验收。接入 Pi 工具和默认 Skill，验证调用来源、取消与脱敏 PNG 交付。Windows 暂缓。
+2. 先读根目录 [AGENTS.md](../../AGENTS.md)，再读 [spec.md](../../spec.md) 第 2、3、10、13、15、26—28 节及本文。运行 `git status` 核对当前工作区。
+3. **S5 已通过 macOS 实机验收。** S5-02 的 8 个 Pi 工具和默认 Skill 已接入。现有 Responses 渠道已验证前台工具集、后台权限隔离、停止与切换视图撤权，以及脱敏 PNG 的会话内交付。Windows 暂缓。
 4. 用户明确排除 Proma 云服务。沿用 Pi、本地 JSON/JSONL、Bun、Jotai 和已有权限边界。参考安装版提供功能证据，不是要求复制其云端架构。
 5. 工程命令使用 Bun。此前的 Node/REA 卸载记录适用于 Windows。当前 Mac 上的 REA 已按用户要求安装，只有需要确认安装版差异时才使用。
 
@@ -15,7 +15,7 @@
 | 项目 | 记录时状态 |
 | --- | --- |
 | 主工程 | `E:\node_project\Proma` |
-| 分支 | `dev/new-version-features` |
+| 分支 | `dev/new-version-features`，跟踪 `origin/dev/new-version-features` |
 | 功能提交 | `13afae331ab310c50f62aefcee0f472ac54e8acb`：`feat: 增加网络诊断、逐轮差异与安全恢复` |
 | 提交范围 | 91 个文件；包含 S1/S2 实现、BDD、四层 IPC、界面、版本与 spec |
 | 更早源码基线 | `86d9dfb511db4c1e3ffded3b6c3e312996f50cbf`，应用 `0.19.58` |
@@ -29,11 +29,11 @@
 | M1 原生验收当前工作区 | Electron `0.19.70`、spec `1.0.11`、shared `0.1.80`，包含项目记忆逐轮采样及快照目录边界修复 |
 | M1 第三方 Responses 实机复测 | Electron `0.19.71`、spec `1.0.12`、shared `0.1.80`，包含渠道兼容、项目记忆初始化、并排焦点和独立 HTML 预览修复 |
 | M1 macOS 系统事件补测 | Electron `0.19.72`、spec `1.0.13`、shared `0.1.80`，修复入口热更新重复挂载并验证受管浏览器交付与休眠提醒 |
-| M1 macOS 提交基线 | Electron `0.19.72`、spec `1.0.14`、shared `0.1.80`，用户确认在其他应用中按 `⌘⇧T` 可唤出「快速记录 Todo」 |
-| S5-01 基线 | Electron `0.19.74`、spec `1.0.16`、shared `0.1.80`，主窗口控制器及脱敏截图通过 macOS 原生验收 |
-| 工作区 | 开始本次交接记录时干净；本次交接文档、AGENTS 入口、spec 和版本元数据另有改动，是否已提交以当前 `git status` 为准 |
+| S3、S4 与 M1 基线 | `5541f077`，Electron `0.19.72`、spec `1.0.14`、shared `0.1.80`。用户实测跨应用 `⌘⇧T` 唤出「快速记录 Todo」 |
+| S5-01 基线 | `bea6837e`，Electron `0.19.74`、spec `1.0.16`、shared `0.1.80`。主窗口控制器及脱敏截图 |
+| S5-02 基线 | `feat(s5-02): 接入 Proma 自身操作工具与默认 Skill`，Electron `0.19.75`、spec `1.0.17`、shared `0.1.80`、默认 Skill `1.0.0` |
 
-`spec.md` 第 16—20 节中的“未提交”、旧 Node 版本和早期构建阻塞是当时的历史记录；最新状态以第 21 节、本文和当前 Git 为准。不要为恢复旧状态执行 reset 或覆盖现有文件。
+`spec.md` 第 16—20 节保留当时的提交、Node 版本和构建状态。最新进展见规格第 26—28 节和当前 Git 历史。
 
 ## 阶段进度
 
@@ -45,15 +45,24 @@
 | S1-03 | 既有 Pi 的局部兼容适配、旧 provider 类型兼容修正 | 核心 Pi 仍为 `0.87.1`；未升级到参考包的 `1.5.2`，不默认需要升级 |
 | S2-01 | turn/file/snapshot 类型、Git/受控工具捕获、比较、私有持久化与容量限制 | 已实现，保留主根/附加根边界和 partial 信息 |
 | S2-02 | Pi 受控执行接线、追加消息分轮、重试 UUID 归属、四层查询与逐轮 diff 面板 | 已实现，捕获在原权限 allow 之后、工具执行之前 |
-| S2-03 | 单文件恢复预览/应用、冲突保护、worktree 移除、监听引用计数和快照清理 | 已实现，本地测试与构建通过；真实 Electron/模型流程待验收 |
+| S2-03 | 单文件恢复预览/应用、冲突保护、worktree 移除、监听引用计数和快照清理 | 本地测试与构建通过，逐轮文件恢复随 M1 完成 macOS 实机验收 |
 | S3-01 | 记忆目标、revision、历史存储 | 已实现，macOS 定向回归与类型检查通过 |
 | S3-02 | 记忆工具、编辑/搜索/历史界面、归档、旧记忆导入与指令关联 | 已实现，macOS 定向回归、浏览器夹具、main/preload 夹具、类型检查及完整构建通过 |
 | S4-01 | 交付卡片、Vault 分页与导航、受管浏览器展示 | 已实现，定向回归、浏览器夹具、类型检查和构建通过 |
 | S4-02 | 提醒及全局快捷捕获、终端活动、项目归档、会话配置和设置同步 | 已实现，验证记录见规格第 25 节 |
-| S5-01 | 主窗口控制器、控件策略、脱敏截图 | 已实现，macOS 原生验收通过 |
-| S5-02、S6、S7 | Pi 工具与 Skill、Windows Computer Use、集成与发布 | 待实施 |
+| S5-01 | 主窗口控制、受限控件操作与脱敏 PNG | 已完成，macOS 原生验收通过 |
+| S5-02 | 8 个 Pi 工具、前台授权和默认 Skill | 已完成，macOS 原生 Electron 与现有 Responses 渠道验收通过 |
+| S6-01 / S6-02 | Windows Computer Use 驱动、操作及预览 | Windows 暂缓，恢复时先完成规格第 11 节的驱动门槛 |
+| S7-01 | 兼容回归与本地发布 | 待 M2，发布验收包含目标平台安装包冒烟 |
 
-M1 的 macOS 主链路通过实机验收。M2 待 S5/S6 在 Windows 上实机验收，M3 待 S7 发布验收。
+M1 和 S5 的 macOS 实机验收通过。M2 仍需 S5/S6 的 Windows 实机验收，M3 仍需 S7 发布验收。
+
+## S5 验收与回退
+
+- S5-01 入口为 `main/lib/proma-self-controller.ts`、`proma-self-control-policy.ts` 和 `proma-self-screenshot.ts`。控制器只连接主进程登记的 Proma 窗口。截图由允许的控件布局和静态标签渲染，测试覆盖覆盖层像素、密码、模态、引用失效和取消。
+- S5-02 在 `main/lib/agent-service.ts` 取得本轮前台授权，经 `agent-orchestrator.ts` 和 `adapters/pi-proma-self-tools.ts` 接入 Pi。默认 Skill 位于 `apps/electron/default-skills/proma-self-control/`，PNG 经既有工具结果显示并保存在当前会话。后台来源、排队启动和初始 Plan 模式不注册工具。停止、切出和重载会撤权。
+- 在 macOS 复验时使用隔离的 Electron 开发实例、合成项目及现有 Responses 渠道。依次让模型读取默认 Skill、交付脱敏 PNG、查找并打开 Todo，再让模型等待不可见的文件搜索框，分别用停止 Agent 和切到全屏规划视图验证取消。核对 PNG 在会话中显示和持久化。S5-01、S5-02 分别通过全仓 681、687 项 Bun 测试、类型检查及 Electron 构建。
+- 回退 Pi 工具层时用 `git revert` 撤销 S5-02，保留 S5-01 控制器。若需同时回退控制器，继续撤销 `bea6837e`，回到 `5541f077` 对应的功能范围。
 
 ## 已实现代码入口与必须保留的行为
 

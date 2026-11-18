@@ -27,6 +27,7 @@ interface Observation {
 interface StoredObservation {
   generation: string
   sessionId: string
+  owner?: object
   expiresAt: number
   nodes: Map<string, ControlNode>
 }
@@ -77,7 +78,7 @@ export class PromaSelfController {
         const controls = await this.scan(cdp, contextId, target)
         const remaining = deadline - performance.now()
         if (remaining <= 0) throw new Error('等待 Proma 控件超时')
-        if (controls.length) return this.storeObservation(execution.sessionId, controls)
+        if (controls.length) return this.storeObservation(execution, controls)
         await delay(Math.min(120, remaining), undefined, { signal: cdp.signal })
       }
     }, timeoutMs + BROWSER_OBSERVE_TIMEOUT_MS)
@@ -127,7 +128,7 @@ export class PromaSelfController {
     return this.run(execution, async cdp => {
       const observation = this.observation
       const node = observation?.nodes.get(reference)
-      if (!observation || !node || observation.sessionId !== execution.sessionId ||
+      if (!observation || !node || observation.sessionId !== execution.sessionId || observation.owner !== execution.observationOwner ||
           observation.generation !== generation || observation.expiresAt <= this.now()) {
         throw new Error('控件引用已失效，请重新观察 Proma')
       }
@@ -146,11 +147,11 @@ export class PromaSelfController {
       this.observation = undefined
       const contextId = await this.isolatedWorld(cdp)
       const controls = await this.scan(cdp, contextId, query)
-      return this.storeObservation(execution.sessionId, controls)
+      return this.storeObservation(execution, controls)
     })
   }
 
-  private storeObservation(sessionId: string, visible: VisibleControl[]): Observation {
+  private storeObservation(execution: PromaSelfExecution, visible: VisibleControl[]): Observation {
     const generation = randomUUID()
     const nodes: StoredObservation['nodes'] = new Map()
     const controls = visible.map(({ control, backendNodeId }) => {
@@ -158,7 +159,7 @@ export class PromaSelfController {
       nodes.set(reference, { control, backendNodeId })
       return { reference, id: control.id, label: control.label, actions: [...control.actions] }
     })
-    this.observation = { generation, sessionId, expiresAt: this.now() + OBSERVATION_TTL_MS, nodes }
+    this.observation = { generation, sessionId: execution.sessionId, owner: execution.observationOwner, expiresAt: this.now() + OBSERVATION_TTL_MS, nodes }
     return { generation, controls }
   }
 

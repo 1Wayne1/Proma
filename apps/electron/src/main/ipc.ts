@@ -324,7 +324,7 @@ import {
   searchAgentSessionReferences,
   resolveAgentCwd,
 } from './lib/agent-session-manager'
-import { runAgent, stopAgent, stopAgentAndDrain, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, isAgentSessionBusy, rebindActiveAgentStreams, listQueuedAgentMessages, reserveAgentSessionStart, queueAgentMessage, submitOrEnqueueAgentMessage, enqueueAgentQueuedMessage, cancelAgentQueuedMessage, moveAgentQueuedMessage, clearAgentQueuedMessages, updateAgentPermissionMode, rewindAgentSession, setVisibleAgentSession } from './lib/agent-service'
+import { runAgent, stopAgent, stopAgentAndDrain, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, isAgentSessionBusy, rebindActiveAgentStreams, listQueuedAgentMessages, reserveAgentSessionStart, queueAgentMessage, submitOrEnqueueAgentMessage, enqueueAgentQueuedMessage, cancelAgentQueuedMessage, moveAgentQueuedMessage, clearAgentQueuedMessages, updateAgentPermissionMode, rewindAgentSession, setVisibleAgentSession, capturePromaSelfForeground } from './lib/agent-service'
 import { permissionService } from './lib/agent-permission-service'
 import { resolvePathAgainstAgentCwd } from './lib/agent-file-path'
 import { askUserService } from './lib/agent-ask-user-service'
@@ -3727,15 +3727,16 @@ export function registerIpcHandlers(): void {
     async (event, input: AgentSendInput): Promise<void> => {
       const releaseStart = reserveAgentSessionStart(input.sessionId)
       try {
+        // runGeneration 是主进程内部运行身份；renderer IPC 绝不能指定或复用它。
+        const { runGeneration: _ignoredRunGeneration, ...publicInput } = input as AgentSendInput & { runGeneration?: unknown }
+        const foreground = capturePromaSelfForeground(publicInput, event.sender, event.senderFrame)
         const session = getAgentSessionMeta(input.sessionId)
         if (session) {
           await feishuBridgeManager.startSessionMirrorRun(session).catch((error) => {
             console.error('[飞书 Session 镜像] 流式卡片初始化失败:', error)
           })
         }
-        // runGeneration 是主进程内部运行身份；renderer IPC 绝不能指定或复用它。
-        const { runGeneration: _ignoredRunGeneration, ...publicInput } = input as AgentSendInput & { runGeneration?: unknown }
-        await runAgent(publicInput, event.sender)
+        await runAgent(publicInput, event.sender, foreground)
       } finally {
         releaseStart()
       }

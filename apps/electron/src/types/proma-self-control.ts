@@ -1,4 +1,5 @@
 export const PROMA_SELF_FILE_SEARCH = 'file-search'
+export const PROMA_SELF_SCREENSHOT_TOOL = 'PromaSelfScreenshot'
 export const PROMA_SELF_SEARCH_FILL_EVENT = 'proma-self:search-fill'
 export const PROMA_SELF_SEARCH_PRESS_EVENT = 'proma-self:search-press'
 export const PROMA_SELF_SEARCH_KEYS = ['ArrowUp', 'ArrowDown', 'Escape'] as const
