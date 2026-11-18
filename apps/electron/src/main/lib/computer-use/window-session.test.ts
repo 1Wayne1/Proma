@@ -81,4 +81,30 @@ describe('S6-01 桌面驱动', () => {
     f.consent.choose = async () => undefined
     await expect(f.observe()).rejects.toThrow('取消')
   })
+  test('预览独立取帧保留操作引用，窗口身份改变后拒绝取帧及激活', async () => {
+    const f = fixture()
+    const ref = await f.observe()
+    let captures = 0, activations = 0
+    const preview = f.session.previewSource(async () => ({
+      close() {},
+      async call(tool, args) {
+        if (tool === 'list_windows') return { structuredContent: { windows: [f.window] } }
+        if (tool === 'bring_to_front') { activations++; return { structuredContent: { activated: true } } }
+        expect(args.display_only).toBe(true)
+        expect(args.include_accessibility_tree).toBe(false)
+        captures++
+        return { structuredContent: f.window, content: [{ type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' }] }
+      },
+    }))
+    try {
+      await preview.capture(signal, false)
+      await preview.activate(signal)
+      await f.session.act(ref, '写入', signal)
+      f.window.title = '另一个窗口'
+      await expect(preview.capture(signal, false)).rejects.toThrow('目标窗口')
+      await expect(preview.activate(signal)).rejects.toThrow('目标窗口')
+      expect(captures).toBe(1)
+      expect(activations).toBe(1)
+    } finally { preview.close() }
+  })
 })

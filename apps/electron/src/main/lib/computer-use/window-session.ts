@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { record } from './transport'
+import type { PreviewSource } from './preview'
 import type { DriverConnection } from './transport'
 
 export interface DesktopWindow { pid: number; id: number; app: string; title: string }
 interface Element { reference: string; role: string; label: string }
 export interface WindowConsent {
-  choose(windows: DesktopWindow[], screenshot: boolean, signal: AbortSignal): Promise<DesktopWindow | undefined>
+  choose(windows: DesktopWindow[], screenshot: boolean, signal: AbortSignal, preview?: boolean): Promise<DesktopWindow | undefined>
   confirm(target: DesktopWindow, element: Element, value: string | undefined, signal: AbortSignal): Promise<boolean>
 }
 interface Snapshot {
@@ -56,13 +57,13 @@ export class DesktopWindowSession {
     this.checkAccess(signal)
   }
 
-  async observe(app: string, screenshot: boolean, signal: AbortSignal) {
+  async observe(app: string, screenshot: boolean, signal: AbortSignal, preview = false) {
     this.snapshot = undefined
     this.checkAccess(signal)
     const candidates = windows(await this.connection.call('list_windows', { app, on_screen_only: true, session: this.session })).slice(0, 6)
     if (!candidates.length) throw new Error('没有找到匹配的可见窗口')
     this.checkAccess(signal)
-    const target = await this.consent.choose(candidates, screenshot, signal)
+    const target = await this.consent.choose(candidates, screenshot, signal, preview)
     if (!target || !candidates.includes(target)) throw new Error('用户取消了窗口选择')
     await this.verify(target, signal)
     this.checkAccess(signal)
@@ -88,6 +89,42 @@ export class DesktopWindowSession {
     const image = screenshot ? decodeImage(result) : undefined
     this.snapshot = { window: target, controls, expires: Date.now() + 60_000 }
     return { window: { app: target.app, title: target.title }, elements, image }
+  }
+
+  /** 显示帧使用独立驱动连接，保持用户选中的快照和操作令牌有效。 */
+  previewSource(connect: (signal: AbortSignal) => Promise<DriverConnection>): PreviewSource {
+    const target = this.snapshot?.window
+    if (!target) throw new Error('请先选择预览窗口')
+    let connection: DriverConnection | undefined
+    const withTarget = async (signal: AbortSignal) => {
+      this.checkAccess(signal)
+      connection ??= await connect(signal)
+      this.checkAccess(signal)
+      const args = { pid: target.pid, window_id: target.id, session: this.session }
+      const candidates = windows(await connection.call('list_windows', { pid: target.pid, on_screen_only: true, session: this.session }))
+      this.checkAccess(signal)
+      if (!candidates.some(window => identity(window, target))) throw new Error('目标窗口已关闭或发生变化，请重新选择')
+      return { driver: connection, args }
+    }
+    return {
+      capture: async (signal, lowFrequency) => {
+        const { driver, args } = await withTarget(signal)
+        const result = await driver.call('get_window_state', { ...args, display_only: true, include_accessibility_tree: false,
+          include_screenshot: true, max_image_dimension: lowFrequency ? 640 : 960 })
+        this.checkAccess(signal)
+        const data = result.structuredContent
+        if (!record(data) || data.pid !== target.pid || data.window_id !== target.id ||
+            (typeof data.window_title === 'string' && data.window_title !== target.title)) throw new Error('预览帧来自其他窗口')
+        return decodeImage(result)
+      },
+      activate: async signal => {
+        const { driver, args } = await withTarget(signal)
+        const result = await driver.call('bring_to_front', { pid: args.pid, window_id: args.window_id })
+        if (record(result.structuredContent) && result.structuredContent.activated === false) throw new Error('目标窗口尚未激活')
+        this.checkAccess(signal)
+      },
+      close() { connection?.close(); connection = undefined },
+    }
   }
 
   async act(reference: string, value: string | undefined, signal: AbortSignal): Promise<void> {

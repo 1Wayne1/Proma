@@ -73,3 +73,5 @@ export * from './turn-changes'
 
 export * from './agent-memory'
 export * from './present'
+
+export * from './desktop-preview'

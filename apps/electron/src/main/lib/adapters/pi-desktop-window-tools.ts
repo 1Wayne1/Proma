@@ -7,6 +7,7 @@ import type { DriverConnection } from '../computer-use/transport'
 import { DesktopWindowSession } from '../computer-use/window-session'
 import type { WindowConsent } from '../computer-use/window-session'
 import type { PromaSelfForegroundAccess } from '../proma-self-access'
+import { desktopPreviews } from '../computer-use/preview-runtime'
 import { getMainWindow } from '../main-window-store'
 
 function display(text: string): string {
@@ -23,8 +24,8 @@ async function prompt(message: string, detail: string, buttons: string[], signal
   return response
 }
 const consent: WindowConsent = {
-  async choose(windows, screenshot, signal) {
-    const response = await prompt('选择允许 Agent 观察的窗口', screenshot ? '窗口控件和截图将发送给本轮模型并保存在会话中。' : '窗口控件标签将发送给本轮模型并保存在会话中。',
+  async choose(windows, screenshot, signal, preview) {
+    const response = await prompt('选择允许 Agent 观察的窗口', (screenshot ? '窗口控件和截图将发送给本轮模型并保存在会话中。' : '窗口控件标签将发送给本轮模型并保存在会话中。') + (preview ? ' 同时在当前会话持续预览此窗口，可随时停止。' : ''),
       windows.map((w, i) => `${i + 1}. ${display(w.app)} · ${display(w.title)} (PID ${w.pid})`), signal)
     return windows[response - 1]
   },
@@ -34,7 +35,7 @@ const consent: WindowConsent = {
       ['允许本次操作'], signal) === 1
   },
 }
-const observeParams = Type.Object({ app: Type.String({ minLength: 1, maxLength: 100 }), screenshot: Type.Optional(Type.Boolean()) }, { additionalProperties: false })
+const observeParams = Type.Object({ app: Type.String({ minLength: 1, maxLength: 100 }), screenshot: Type.Optional(Type.Boolean()), preview: Type.Optional(Type.Boolean()) }, { additionalProperties: false })
 const actionParams = Type.Object({ reference: Type.String({ pattern: '^[a-f0-9-]{36}$' }), value: Type.Optional(Type.String({ maxLength: 512, pattern: '^[^\\x00-\\x1f\\x7f\\u202a-\\u202e\\u2066-\\u2069]*$' })) }, { additionalProperties: false })
 
 interface DesktopRuntime {
@@ -50,10 +51,11 @@ function installedDesktopRuntime(): DesktopRuntime | undefined {
   }
 }
 
-export function buildPiDesktopWindowTools(access: PromaSelfForegroundAccess | undefined, runtime = installedDesktopRuntime()): ToolDefinition[] {
+export function buildPiDesktopWindowTools(access: (PromaSelfForegroundAccess & { sessionId?: string }) | undefined, runtime = installedDesktopRuntime()): ToolDefinition[] {
   if (!runtime || !access?.isCurrent() || access.signal.aborted) return []
   const lifetime = access.signal
   let connection: DriverConnection | undefined
+  let stopPreview: (() => void) | undefined
   let session: DesktopWindowSession | undefined
   let idle: ReturnType<typeof setTimeout> | undefined
   let active = false
@@ -88,15 +90,20 @@ export function buildPiDesktopWindowTools(access: PromaSelfForegroundAccess | un
     }
   }
   return [{
-    name: 'DesktopWindowObserve', label: '观察桌面窗口', description: '按应用名称查找窗口，用户选择后返回控件及一次性引用。需要窗口图像时传 screenshot。', parameters: observeParams,
+    name: 'DesktopWindowObserve', label: '观察桌面窗口', description: '按应用名称查找窗口，用户选择后返回控件及一次性引用。向用户展示实时预览时传 preview=true，需要向模型交付单帧时传 screenshot=true。', parameters: observeParams,
     execute: (_id, args, signal) => execute(signal, async current => {
       if (!Check(observeParams, args) || !args.app.trim()) throw new Error('请指定应用名称')
+      stopPreview?.()
       release()
       connection = await runtime.connect(current)
       current.throwIfAborted()
       check()
       session = new DesktopWindowSession(connection, runtime.consent, check)
-      const { image, ...result } = await session.observe(args.app.trim(), args.screenshot === true, current)
+      const { image, ...result } = await session.observe(args.app.trim(), args.screenshot === true, current, args.preview === true)
+      if (args.preview && access.sessionId) {
+        check()
+        stopPreview = desktopPreviews.bind(access.sessionId, `${result.window.app} · ${result.window.title}`, session.previewSource(runtime.connect), lifetime, access.isCurrent)
+      }
       return { content: [{ type: 'text' as const, text: JSON.stringify(result) }, ...(image ? [{ type: 'image' as const, mimeType: 'image/png', data: image }] : [])], details: {} }
     }),
   }, {

@@ -2,13 +2,13 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | 1.0.18 |
+| 文档版本 | 1.0.19 |
 | 制定日期 | 2026-11-16 |
-| 状态 | S1—S4 已形成提交基线，M1 和 S5 的 macOS 验收通过。S6-01 已接入 Windows x64 与 macOS arm64 |
+| 状态 | S1—S4 已形成提交基线，M1 和 S5 的 macOS 验收通过。S6-02 窗口预览已在 Windows x64 实测，macOS arm64 待实机验收 |
 | 开发分支 | `dev/new-version-features` |
 | 源码基线 | 桌面应用 `0.19.58`；提交 `86d9dfb511db4c1e3ffded3b6c3e312996f50cbf` |
 | 参考安装版 | `D:\Program Files\Proma`，桌面应用 `0.22.80` |
-| 当前版本 | M1 基线桌面应用 `0.19.72`，S5-01 基线 `0.19.74`，S5-02 基线 `0.19.75`，S6-01 `0.19.77`，共享包 `0.1.80` |
+| 当前版本 | M1 基线桌面应用 `0.19.72`，S5-01 基线 `0.19.74`，S5-02 基线 `0.19.75`，S6-02 `0.19.78`，共享包 `0.1.81` |
 | 首要平台 | Windows；共享逻辑需维持 macOS/Linux 的既有能力 |
 | 接手入口 | [当前交接记录](docs/plans/2026-11-17-local-upgrade-handoff.md)，包含 M1 和 S5 的 macOS 验收结果 |
 
@@ -867,3 +867,13 @@ Pi 注册 `PromaSelfObserve`、`PromaSelfFind`、`PromaSelfClick`、`PromaSelfFi
 Windows x64 与 macOS arm64 使用用户安装的官方 Cua Driver `0.53.0`。启动前校验固定位置的驱动 SHA-256，Windows 同时校验 UIA helper。前台 Pi 运行通过 `DesktopWindowObserve` 选择窗口，`DesktopWindowAct` 使用短期控件引用，原生对话框确认每个动作。
 
 Windows 隔离 Electron 实测原生窗口选择框取消、目标窗口截图、后台填写和目标字段回读。成功路径由测试夹具批准。17 项定向测试、六个工作区类型检查和 Windows Electron 构建通过。Mac 已核对发行物和工具协议，系统授权、原生窗口及两端安装包仍待验收。
+
+## 30. S6-02 桌面窗口预览（2026-11-18）
+
+S6-01 基线为 `68e1fb5e`。前台会话调用 `DesktopWindowObserve` 并指定 `preview: true` 时，用户在窗口选择框授权持续预览。选择 `screenshot: true` 另行交付模型可见的单帧。预览卡片提供激活目标、停止和失败重试。当前 Agent 运行结束、撤权或重新选择目标时释放旧预览。
+
+Windows x64 与 macOS arm64 使用固定版本驱动的窗口 PNG。界面消费完一帧才请求下一帧，正常间隔为 250 毫秒，捕获过慢或失败后改用 640 像素、两秒间隔的低频预览。所有帧在交付前核对会话、预览标识、PID 和窗口 ID。按控件引用操作，不使用预览像素推算点击坐标。默认 Skill `cua-driver-cli` 为 `1.0.0`。
+
+Windows 隔离 Electron 使用真实驱动、正式 preload 和 React 预览卡片显示同一测试窗口的两帧不同画面，停止后卡片与截图清除。21 项定向测试、六个工作区类型检查及 Electron 构建通过。Mac 的系统授权、原生窗口预览和多屏 DPI 仍待实机验证。
+
+Windows x64 在隔离目录生成了未签名的 NSIS 冒烟包，已核对打包资源中 `default-skills/cua-driver-cli/SKILL.md` 与源码的 SHA-256 一致。该次冒烟沿用了本机 Electron 和现有原生模块，安装升级及签名发布验收待 S7。

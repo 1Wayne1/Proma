@@ -237,6 +237,10 @@ eventBus.use((sessionId, payload, next) => {
 })
 
 /** renderer 切换标签时更新流式优先级；切入会话立即 flush 等待中的后台快照。 */
+export function isVisibleAgentSession(sender: WebContents, sessionId: string): boolean {
+  return visibleAgentSessions.get(sender) === sessionId
+}
+
 export function setVisibleAgentSession(webContents: WebContents, sessionId: string | null): void {
   rebindActiveAgentStreams(webContents)
   attachWebContentsCleanup(webContents)

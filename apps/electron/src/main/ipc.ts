@@ -3,6 +3,7 @@ import { isWithinTurnRoot, turnPathKey } from './lib/turn-changes/paths'
 import { TurnRestoreService } from './lib/turn-changes/restore'
 import { getTurnChangeRecorder, hasTurnChangesInProject, startTurnChangesMaintenance } from './lib/turn-changes/service'
 import { registerAgentMemoryIpc } from './lib/agent-memory-ipc'
+import { registerDesktopPreviewIpc } from './lib/computer-use/preview-ipc'
 import { purgePresentSession, registerPresentIpc } from './lib/present-ipc'
 import { getPresentationPreview } from './lib/detached-preview-window'
 import { registerTurnOperationsIpcHandlers } from './lib/turn-changes/operations-ipc'
@@ -324,7 +325,7 @@ import {
   searchAgentSessionReferences,
   resolveAgentCwd,
 } from './lib/agent-session-manager'
-import { runAgent, stopAgent, stopAgentAndDrain, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, isAgentSessionBusy, rebindActiveAgentStreams, listQueuedAgentMessages, reserveAgentSessionStart, queueAgentMessage, submitOrEnqueueAgentMessage, enqueueAgentQueuedMessage, cancelAgentQueuedMessage, moveAgentQueuedMessage, clearAgentQueuedMessages, updateAgentPermissionMode, rewindAgentSession, setVisibleAgentSession, capturePromaSelfForeground } from './lib/agent-service'
+import { runAgent, stopAgent, stopAgentAndDrain, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, isAgentSessionBusy, rebindActiveAgentStreams, listQueuedAgentMessages, reserveAgentSessionStart, queueAgentMessage, submitOrEnqueueAgentMessage, enqueueAgentQueuedMessage, cancelAgentQueuedMessage, moveAgentQueuedMessage, clearAgentQueuedMessages, updateAgentPermissionMode, rewindAgentSession, setVisibleAgentSession, isVisibleAgentSession, capturePromaSelfForeground } from './lib/agent-service'
 import { permissionService } from './lib/agent-permission-service'
 import { resolvePathAgainstAgentCwd } from './lib/agent-file-path'
 import { askUserService } from './lib/agent-ask-user-service'
@@ -1470,6 +1471,7 @@ async function withOAuthDeviceCodeQr<T extends CodexOAuthDeviceCode | GithubCopi
 export function registerIpcHandlers(): void {
   registerAgentMemoryIpc()
   registerPresentIpc()
+  registerDesktopPreviewIpc(isVisibleAgentSession)
   registerNetworkIpcHandlers()
   registerTurnChangesIpcHandlers()
   const restoreService = new TurnRestoreService(getTurnChangeRecorder().store, {

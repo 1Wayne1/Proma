@@ -19,6 +19,7 @@ import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai'
 import { toast } from 'sonner'
 import { CornerDownLeft, Square, Settings, X, Copy, Check, Brain, Sparkles, ListTodo, Paperclip } from 'lucide-react'
 import { AgentMessages, type AgentHistoryQuoteNavigationRequest } from './AgentMessages'
+import { DesktopWindowPreview } from './DesktopWindowPreview'
 import { AgentHeader } from './AgentHeader'
 import { AgentMessageQueue } from './AgentMessageQueue'
 import { SkillMentionNamesProvider } from './SkillMentionNamesProvider'
@@ -2990,6 +2991,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
       >
         {/* 临时 Agent 已由右侧 Tab 表明归属，避免在窄面板重复渲染全局标题栏。 */}
         {!embedded && <AgentHeader sessionId={sessionId} />}
+        <DesktopWindowPreview key={sessionId} sessionId={sessionId} />
 
         <div className={cn(
           'flex min-h-0 flex-1 w-full flex-col overflow-hidden',

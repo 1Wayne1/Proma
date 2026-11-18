@@ -10,7 +10,7 @@ export function record(value: unknown): value is Record<string, unknown> {
 }
 
 export interface DriverConnection {
-  call(tool: 'list_windows' | 'get_window_state' | 'click' | 'set_value', args: Record<string, unknown>): Promise<Record<string, unknown>>
+  call(tool: 'list_windows' | 'get_window_state' | 'click' | 'set_value' | 'bring_to_front', args: Record<string, unknown>): Promise<Record<string, unknown>>
   close(): void
 }
 

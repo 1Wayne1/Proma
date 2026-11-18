@@ -6,7 +6,8 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { PRESENT_IPC_CHANNELS, AGENT_MEMORY_IPC_CHANNEL, NETWORK_IPC_CHANNELS, TURN_CHANGES_IPC_CHANNELS } from '@proma/shared'
+import type { DesktopPreviewState, DesktopPreviewFrame, DesktopPreviewCommand } from '@proma/shared'
+import { DESKTOP_PREVIEW_IPC, PRESENT_IPC_CHANNELS, AGENT_MEMORY_IPC_CHANNEL, NETWORK_IPC_CHANNELS, TURN_CHANGES_IPC_CHANNELS } from '@proma/shared'
 import type { TurnChangesQuery, TurnFileDiffQuery, TurnChangeRecord, TurnFileDiff, TurnChangeOwner, TurnRestoreApplyInput, TurnRestorePreview, TurnRestoreResult, RemoveWorktreeInput, RemoveWorktreeResult } from '@proma/shared'
 import type { PresentTurn, PresentedResource, PresentAction, PresentActionResult, PresentReceipt, VaultDirectoryPage, VaultLocateResult, VaultWikiResolution } from '@proma/shared'
 import type { AgentMemoryReplies, AgentMemoryRequest } from '@proma/shared'
@@ -523,6 +524,9 @@ export interface ElectronAPI {
   openVaultFolder: (vaultId: string, path: string) => Promise<void>
   resolveVaultWiki: (vaultId: string, target: string, source: string) => Promise<VaultWikiResolution>
   readVaultFile: (relativePath: string, vaultId?: string) => Promise<VaultReadResult>
+  desktopPreviewState: (sessionId: string) => Promise<DesktopPreviewState | null>
+  desktopPreviewCommand: (input: DesktopPreviewCommand) => Promise<DesktopPreviewFrame | null>
+  onDesktopPreviewChanged: (callback: (sessionId: string) => void) => () => void
   listPresentedResources: (turn: PresentTurn) => Promise<PresentedResource[]>
   actOnPresentedResource: (input: PresentAction) => Promise<PresentActionResult>
   finishVaultPresentation: (input: PresentReceipt) => Promise<boolean>
@@ -1863,6 +1867,13 @@ const electronAPI: ElectronAPI = {
   openVaultFolder: (id, path) => ipcRenderer.invoke(VAULT_IPC_CHANNELS.OPEN_FOLDER, id, path),
   resolveVaultWiki: (id, target, source) => ipcRenderer.invoke(VAULT_IPC_CHANNELS.RESOLVE_WIKI, id, target, source),
   readVaultFile: (relativePath, id) => ipcRenderer.invoke(VAULT_IPC_CHANNELS.READ_FILE, relativePath, id),
+  desktopPreviewState: sessionId => ipcRenderer.invoke(DESKTOP_PREVIEW_IPC.state, sessionId),
+  desktopPreviewCommand: input => ipcRenderer.invoke(DESKTOP_PREVIEW_IPC.command, input),
+  onDesktopPreviewChanged: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, sessionId: string) => callback(sessionId)
+    ipcRenderer.on(DESKTOP_PREVIEW_IPC.changed, listener)
+    return () => { ipcRenderer.removeListener(DESKTOP_PREVIEW_IPC.changed, listener) }
+  },
   listPresentedResources: turn => ipcRenderer.invoke(PRESENT_IPC_CHANNELS.LIST, turn),
   actOnPresentedResource: input => ipcRenderer.invoke(PRESENT_IPC_CHANNELS.ACT, input),
   finishVaultPresentation: input => ipcRenderer.invoke(PRESENT_IPC_CHANNELS.RECEIPT, input),
