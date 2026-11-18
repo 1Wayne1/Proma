@@ -1,5 +1,6 @@
 import { buildPiMemoryTools } from './adapters/pi-memory-tools'
 import { buildPiPresentTool } from './adapters/pi-present-tool'
+import { buildPiDesktopWindowTools } from './adapters/pi-desktop-window-tools'
 import { buildPiPromaSelfTools, isPromaSelfTool } from './adapters/pi-proma-self-tools'
 import type { PromaSelfForegroundAccess } from './proma-self-access'
 import { presentService } from './present-runtime'
@@ -1336,6 +1337,12 @@ export class AgentOrchestrator {
       // 动态 canUseTool：每次调用读取当前权限模式，支持运行中切换
       const canUseTool = async (toolName: string, input: Record<string, unknown>, options: CanUseToolOptions): Promise<PermissionResult> => {
         const currentMode = getPermissionMode()
+        if (toolName === 'DesktopWindowObserve' || toolName === 'DesktopWindowAct') {
+          // 目标窗口和单次动作由主进程原生对话框确认。
+          return canControlProma() && !options.signal.aborted
+            ? { behavior: 'allow', updatedInput: input }
+            : { behavior: 'deny', message: '当前运行没有桌面操作权限' }
+        }
         if (isPromaSelfTool(toolName)) {
           return canControlProma() && !options.signal.aborted
             ? { behavior: 'allow', updatedInput: input }
@@ -1685,12 +1692,14 @@ export class AgentOrchestrator {
           this.activeSessions.get(sessionId) !== runGeneration || isAgentSessionDeleting(sessionId)) return
         return { sessionId, turnId: presentTurnId }
       })
-      const selfTools = buildPiPromaSelfTools(foreground && selfControlLifetime ? {
+      const foregroundAccess = foreground && selfControlLifetime ? {
         sessionId,
         isCurrent: canControlProma,
         signal: AbortSignal.any([foreground.signal, selfControlLifetime.signal]),
-      } : undefined)
-      const piCustomTools = [...piBuiltinTools, ...piMcpTools, ...memoryTools, presentTool, ...selfTools, ...(extensions.piCustomTools ?? [])]
+      } : undefined
+      const selfTools = buildPiPromaSelfTools(foregroundAccess)
+      const desktopTools = buildPiDesktopWindowTools(foregroundAccess)
+      const piCustomTools = [...piBuiltinTools, ...piMcpTools, ...memoryTools, presentTool, ...selfTools, ...desktopTools, ...(extensions.piCustomTools ?? [])]
       if (workspaceId && workspaceSlug && changesTurnId) {
         turnChangesRun = createTurnChangesRun({
           owner: { sessionId, workspaceId, turnId: changesTurnId },

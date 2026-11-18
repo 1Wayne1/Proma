@@ -2,13 +2,13 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | 1.0.17 |
+| 文档版本 | 1.0.18 |
 | 制定日期 | 2026-11-16 |
-| 状态 | S1—S4 已形成提交基线，M1 和 S5 的 macOS 验收通过。Windows 暂缓 |
+| 状态 | S1—S4 已形成提交基线，M1 和 S5 的 macOS 验收通过。S6-01 已接入 Windows x64 与 macOS arm64 |
 | 开发分支 | `dev/new-version-features` |
 | 源码基线 | 桌面应用 `0.19.58`；提交 `86d9dfb511db4c1e3ffded3b6c3e312996f50cbf` |
 | 参考安装版 | `D:\Program Files\Proma`，桌面应用 `0.22.80` |
-| 当前版本 | M1 基线桌面应用 `0.19.72`，S5-01 基线 `0.19.74`，S5-02 基线 `0.19.75`，共享包 `0.1.80` |
+| 当前版本 | M1 基线桌面应用 `0.19.72`，S5-01 基线 `0.19.74`，S5-02 基线 `0.19.75`，S6-01 `0.19.77`，共享包 `0.1.80` |
 | 首要平台 | Windows；共享逻辑需维持 macOS/Linux 的既有能力 |
 | 接手入口 | [当前交接记录](docs/plans/2026-11-17-local-upgrade-handoff.md)，包含 M1 和 S5 的 macOS 验收结果 |
 
@@ -861,3 +861,9 @@ Pi 注册 `PromaSelfObserve`、`PromaSelfFind`、`PromaSelfClick`、`PromaSelfFi
 截图沿现有 Pi 工具结果返回 PNG，作为独立图像显示在当前轮，并写入会话记录。macOS 隔离 Electron 使用现有 CPA OpenAI Responses 渠道完成默认 Skill 读取、PNG 交付和 Todo 导航。实机确认前台运行注册 8 个工具，其余来源注册 0 个。截图成功解码显示并持久化，合成密码、对话文本和覆盖层像素未进入 PNG。停止等待会释放 CDP，不再执行后续动作。切到全屏规划再切回原会话时，已撤销的等待不会恢复。
 
 桌面应用 `0.19.75` 的全仓 Bun 687 项、六个工作区类型检查、Electron 构建和 `git diff --check` 通过。Windows 暂缓。
+
+## 29. S6-01 桌面窗口驱动（2026-11-18）
+
+Windows x64 与 macOS arm64 使用用户安装的官方 Cua Driver `0.53.0`。启动前校验固定位置的驱动 SHA-256，Windows 同时校验 UIA helper。前台 Pi 运行通过 `DesktopWindowObserve` 选择窗口，`DesktopWindowAct` 使用短期控件引用，原生对话框确认每个动作。
+
+Windows 隔离 Electron 实测原生窗口选择框取消、目标窗口截图、后台填写和目标字段回读。成功路径由测试夹具批准。17 项定向测试、六个工作区类型检查和 Windows Electron 构建通过。Mac 已核对发行物和工具协议，系统授权、原生窗口及两端安装包仍待验收。
