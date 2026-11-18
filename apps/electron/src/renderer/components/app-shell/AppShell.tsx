@@ -10,6 +10,7 @@ import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { LeftSidebar } from './LeftSidebar'
 import { RightSidePanel } from './RightSidePanel'
+import { useAgentTerminalEvents } from '@/hooks/useAgentTerminalEvents'
 import { MainArea } from '@/components/tabs/MainArea'
 import { appModeAtom } from '@/atoms/app-mode'
 import { agentDiffPanelTabAtom, agentSessionComponentOpenMapAtom, agentSessionsAtom, agentSidePanelLayoutAtomFamily, agentSidePanelLayoutMapAtom, agentSidePanelSplitMapAtom, currentAgentSessionIdAtom, currentSessionSidePanelOpenAtom, isWorkspaceComponentTab, pruneAgentSidePanelLayouts, fileBrowserExpandedPathsAtom, fileBrowserScrollTopMapAtom, pruneFileBrowserStateMap } from '@/atoms/agent-atoms'
@@ -71,6 +72,7 @@ function clampLeftSidebarWidth(width: number): number {
 }
 
 export function AppShell(): React.ReactElement {
+  useAgentTerminalEvents()
   const appMode = useAtomValue(appModeAtom)
   const { workspaces, currentWorkspaceId } = useProjectActions()
   const currentWorkspace = workspaces.find((workspace) => workspace.id === currentWorkspaceId)

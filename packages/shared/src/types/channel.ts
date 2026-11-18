@@ -390,6 +390,14 @@ export interface ChannelsConfig {
   appliedPresetModelUpdates?: string[]
   /** 渠道列表 */
   channels: Channel[]
+  pendingRemovalNotices?: RemovedChannelSummary[]
+}
+
+/** 仅发送非敏感显示信息。 */
+export interface RemovedChannelSummary {
+  id: string
+  name: string
+  reason: 'deleted' | 'retired'
 }
 
 /**
@@ -512,6 +520,8 @@ export const CHANNEL_IPC_CHANNELS = {
   UPDATE: 'channel:update',
   /** 删除渠道 */
   DELETE: 'channel:delete',
+  REMOVED: 'channel:removed',
+  CONSUME_REMOVAL_NOTICES: 'channel:consume-removal-notices',
   /** 解密获取明文 API Key */
   DECRYPT_KEY: 'channel:decrypt-key',
   /** 测试渠道连接 */

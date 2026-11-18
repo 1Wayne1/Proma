@@ -59,9 +59,12 @@ import {
 } from './atoms/ui-preferences'
 import {
   markdownFontSizeAtom,
-  initializeMarkdownFontSize,
+  applyMarkdownFontSizeToDOM,
 } from './atoms/markdown-font-size'
 import { useGlobalAgentListeners } from './hooks/useGlobalAgentListeners'
+import { userProfileAtom } from './atoms/user-profile'
+import { DEFAULT_MARKDOWN_FONT_SIZE } from '../types'
+import { PlanningQuickCapture } from './components/planning/PlanningQuickCapture'
 import { useGlobalChatListeners } from './hooks/useGlobalChatListeners'
 import { tabsAtom, activeTabIdAtom, getPersistableTabState } from './atoms/tab-atoms'
 import type { TabItem } from './atoms/tab-atoms'
@@ -73,6 +76,7 @@ import { currentConversationIdAtom, channelsAtom, channelsLoadedAtom, selectedMo
 import { appModeAtom } from './atoms/app-mode'
 import type { FeishuBotBridgeState, FeishuBridgeState, DingTalkBotBridgeState, DingTalkBridgeState } from '@proma/shared'
 import { Toaster } from './components/ui/sonner'
+import { TooltipProvider } from './components/ui/tooltip'
 import { toast } from 'sonner'
 import { ArrowUpRight } from 'lucide-react'
 import { diffCapabilities } from '@proma/shared'
@@ -256,10 +260,10 @@ function AgentSettingsInitializer(): null {
         setAgentWorkspaces(workspaces)
         if (settings.agentWorkspaceId) {
           // 验证工作区仍然存在
-          const exists = workspaces.some((w) => w.id === settings.agentWorkspaceId)
-          setCurrentWorkspaceId(exists ? settings.agentWorkspaceId! : workspaces[0]?.id ?? null)
+          const selected = workspaces.find(w => w.id === settings.agentWorkspaceId && !w.archived)
+          setCurrentWorkspaceId(selected?.id ?? workspaces.find(w => !w.archived)?.id ?? null)
         } else if (workspaces.length > 0) {
-          setCurrentWorkspaceId(workspaces[0]!.id)
+          setCurrentWorkspaceId(workspaces.find(w => !w.archived)?.id ?? null)
         }
         setAgentSettingsReady(true)
       }).catch((err) => {
@@ -271,6 +275,26 @@ function AgentSettingsInitializer(): null {
       setAgentSettingsReady(true) // 即使出错也标记就绪，避免永远阻塞
     })
   }, [setAgentChannelId, setAgentModelId, setAgentWorkspaces, setCurrentWorkspaceId, setThinking, setEffort, setMaxBudget, setMaxTurns, setAutomationGroupOrder, setChannels, setChannelsLoaded, setAgentSettingsReady])
+
+  useEffect(() => {
+    const unsubscribe = window.electronAPI.onChannelRemoved(channel => {
+      setChannels(channels => channels.filter(item => item.id !== channel.id))
+      if (store.get(selectedModelAtom)?.channelId === channel.id) store.set(selectedModelAtom, null)
+      if (store.get(agentChannelIdAtom) === channel.id) {
+        setAgentChannelId(null)
+        setAgentModelId(null)
+      }
+      toast.info(`渠道「${channel.name}」已删除`)
+    })
+    void window.electronAPI.consumeChannelRemovalNotices().then(notices => {
+      if (!notices.length) return
+      toast.warning('部分渠道已停止支持', {
+        description: notices.map(notice => notice.name).join('、'),
+        id: 'retired-channel-notices',
+      })
+    }).catch(console.error)
+    return unsubscribe
+  }, [setAgentChannelId, setAgentModelId, setChannels, store])
 
   // 工作区切换时重置能力缓存，预加载基线
   useEffect(() => {
@@ -674,9 +698,39 @@ function MarkdownFontSizeInitializer(): null {
   const setMarkdownFontSize = useSetAtom(markdownFontSizeAtom)
 
   useEffect(() => {
-    initializeMarkdownFontSize(setMarkdownFontSize)
+    let receivedChange = false
+    let disposed = false
+    const apply = (size = DEFAULT_MARKDOWN_FONT_SIZE): void => {
+      setMarkdownFontSize(size)
+      applyMarkdownFontSizeToDOM(size)
+    }
+    const unsubscribe = window.electronAPI.onLiveLocalPreferencesChanged(settings => {
+      receivedChange = true
+      apply(settings.markdownFontSize)
+    })
+    void window.electronAPI.getSettings().then(settings => {
+      if (!disposed && !receivedChange) apply(settings.markdownFontSize)
+    }).catch(console.error)
+    return () => { disposed = true; unsubscribe() }
   }, [setMarkdownFontSize])
 
+  return null
+}
+
+function UserProfileInitializer(): null {
+  const setProfile = useSetAtom(userProfileAtom)
+  useEffect(() => {
+    let receivedChange = false
+    let disposed = false
+    const unsubscribe = window.electronAPI.onUserProfileChanged(profile => {
+      receivedChange = true
+      setProfile(profile)
+    })
+    void window.electronAPI.getUserProfile().then(profile => {
+      if (!disposed && !receivedChange) setProfile(profile)
+    }).catch(console.error)
+    return () => { disposed = true; unsubscribe() }
+  }, [setProfile])
   return null
 }
 
@@ -1025,19 +1079,27 @@ function LegacyScratchPadMigrationInitializer(): null {
   return null
 }
 
+// 每个原生窗口只挂载一个 React 根。开发态重新执行入口前，释放旧树的 IPC 订阅和原生浏览器槽位。
+let rendererRoot: ReturnType<typeof ReactDOM.createRoot> | null = ReactDOM.createRoot(document.getElementById('root')!)
+import.meta.hot?.dispose(() => {
+  rendererRoot?.unmount()
+  rendererRoot = null
+})
+
 // ===== 快速任务窗口：轻量渲染 =====
 if (isQuickTaskWindow) {
   import('./components/quick-task/QuickTaskApp').then(({ QuickTaskApp }) => {
-    ReactDOM.createRoot(document.getElementById('root')!).render(
+    rendererRoot?.render(
       <React.StrictMode>
         <ThemeInitializer />
+        <MarkdownFontSizeInitializer />
         <QuickTaskApp />
       </React.StrictMode>
     )
   })
 } else if (isVoiceDictationIndicatorWindow) {
   import('./components/voice-dictation/VoiceDictationIndicatorApp').then(({ VoiceDictationIndicatorApp }) => {
-    ReactDOM.createRoot(document.getElementById('root')!).render(
+    rendererRoot?.render(
       <React.StrictMode>
         <ThemeInitializer />
         <VoiceDictationIndicatorApp />
@@ -1046,20 +1108,23 @@ if (isQuickTaskWindow) {
   })
 } else if (isDetachedPreviewWindow) {
   import('./components/diff/DetachedPreviewApp').then(({ DetachedPreviewApp }) => {
-    ReactDOM.createRoot(document.getElementById('root')!).render(
+    rendererRoot?.render(
       <React.StrictMode>
         <ThemeInitializer />
         <MarkdownFontSizeInitializer />
-        <DetachedPreviewApp />
+        <TooltipProvider delayDuration={200} disableHoverableContent>
+          <DetachedPreviewApp />
+        </TooltipProvider>
         <Toaster position="top-right" offset={{ top: 58, right: 12 }} />
       </React.StrictMode>
     )
   })
 } else if (isWorkspaceMemoryWindow) {
   import('./components/agent-skills/WorkspaceMemoryWindowApp').then(({ WorkspaceMemoryWindowApp }) => {
-    ReactDOM.createRoot(document.getElementById('root')!).render(
+    rendererRoot?.render(
       <React.StrictMode>
         <ThemeInitializer />
+        <MarkdownFontSizeInitializer />
         <WorkspaceMemoryWindowApp />
         <Toaster position="top-right" offset={{ top: 58, right: 12 }} />
       </React.StrictMode>
@@ -1067,7 +1132,7 @@ if (isQuickTaskWindow) {
   })
 } else if (isAgentStatusHoverWindow) {
   import('./components/agent-status-hover/HoverPanel').then(({ HoverPanel }) => {
-    ReactDOM.createRoot(document.getElementById('root')!).render(
+    rendererRoot?.render(
       <React.StrictMode>
         <ThemeInitializer />
         <HoverPanel />
@@ -1076,10 +1141,11 @@ if (isQuickTaskWindow) {
   })
 } else {
   // ===== 主窗口：完整渲染 =====
-  ReactDOM.createRoot(document.getElementById('root')!).render(
+  rendererRoot.render(
     <React.StrictMode>
       <ThemeInitializer />
       <AgentSettingsInitializer />
+      <UserProfileInitializer />
       <NotificationsInitializer />
       <DockBadgeInitializer />
       <UiPreferencesInitializer />
@@ -1097,6 +1163,7 @@ if (isQuickTaskWindow) {
       <LegacyScratchPadMigrationInitializer />
       <VoiceDictationApp embedded />
       <GlobalShortcuts />
+      <PlanningQuickCapture />
       <TabSwitcher />
       <App />
     </React.StrictMode>

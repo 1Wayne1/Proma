@@ -93,10 +93,10 @@ export function DetachedPreviewApp(): React.ReactElement {
             {data.filePath}
           </div>
         </div>
-        <DefaultAppOpenButton
+        {!data.presentation && <DefaultAppOpenButton
           filePath={defaultAppTargetPath}
           access={defaultAppAccess}
-        />
+        />}
         <button
           type="button"
           onClick={handleRefresh}
@@ -119,6 +119,7 @@ export function DetachedPreviewApp(): React.ReactElement {
             gitRoot={data.gitRoot}
             previewOnly={data.previewOnly}
             readOnly={data.readOnly}
+            presentation={data.presentation}
             basePaths={data.basePaths}
             unrestricted={data.unrestricted}
             workspaceSkillSlug={data.workspaceSkillSlug}

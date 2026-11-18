@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { once } from 'node:events'
 import { join } from 'node:path'
-import { TURN_CHANGES_IPC_CHANNELS } from '@proma/shared'
-import { getApi, invokeAs, sender, state, app, terminalHost } from './operations-host'
+import { TERMINAL_IPC_CHANNELS, TURN_CHANGES_IPC_CHANNELS } from '@proma/shared'
+import { getApi, ipcRenderer, invokeAs, sender, state, app, terminalHost } from './operations-host'
 import { TurnChangeRecorder } from '../recorder'
 import { TurnRestoreService } from '../restore'
 import { registerTurnOperationsIpcHandlers } from '../operations-ipc'
 import { removeProjectWorktree } from '../../worktree-removal'
 import { assertNoProjectMutation, withProjectMutation } from '../../project-mutation-guard'
-import { createTerminal, closeAgentTerminal, hasTerminalsInProject, killTerminal, listAgentTerminals, openAgentTerminal, releaseExitedTerminalsInProject } from '../../terminal-service'
+import { closeTerminalsForSession, createTerminal, getAgentTerminalCatalog, getTerminalSnapshot, hasTerminalsInProject, killTerminal, listAgentTerminals, openAgentTerminal, releaseExitedTerminalsInProject, retainAgentTerminal } from '../../terminal-service'
 import '../../../../preload/index'
 
 async function verify(): Promise<void> {
@@ -71,11 +72,29 @@ async function verify(): Promise<void> {
   const worktree = join(root, 'worktree'); git('worktree', 'add', '-b', 'retained-branch', worktree)
   const terminal = await openAgentTerminal({ sessionId: owner.sessionId, cwd: worktree })
   await assert.rejects(api.removeWorktree({ sessionId: owner.sessionId, worktreePath: worktree }), /活动/)
+  terminalHost.parents.add(1)
+  const probeDeadline = new AbortController()
+  const probeTimer = setTimeout(() => probeDeadline.abort(), 8_000)
+  const [, activity] = await once(ipcRenderer, TERMINAL_IPC_CHANNELS.AGENT_ACTIVITY, { signal: probeDeadline.signal }).finally(() => clearTimeout(probeTimer))
+  assert.deepEqual(activity, { sessionId: owner.sessionId, terminalIds: [terminal.terminalId] })
+  assert.throws(() => retainAgentTerminal('other-session', terminal.terminalId), /不属于/)
+  retainAgentTerminal(owner.sessionId, terminal.terminalId)
+  terminalHost.output!({ terminalId: terminal.terminalId, sequence: 1, data: '结果' })
+  assert.deepEqual(terminalHost.acknowledgements, [{ terminalId: terminal.terminalId, sequence: 1 }])
+  const emptyActivity = once(ipcRenderer, TERMINAL_IPC_CHANNELS.AGENT_ACTIVITY)
   terminalHost.exit!({ terminalId: terminal.terminalId, exitCode: 0 })
+  assert.deepEqual((await emptyActivity)[1], { sessionId: owner.sessionId, terminalIds: [] })
+  assert.equal(getTerminalSnapshot(terminal.terminalId).output, '结果')
+  assert.equal(getTerminalSnapshot(terminal.terminalId).exitCode, 0)
   assert.equal(listAgentTerminals(owner.sessionId).length, 1)
   const removed = await api.removeWorktree({ sessionId: owner.sessionId, worktreePath: worktree })
   assert.deepEqual(removed.clearedSessionIds, ['idle-session'])
   assert.equal(listAgentTerminals(owner.sessionId).length, 0)
+  const live = await openAgentTerminal({ sessionId: owner.sessionId, cwd: main })
+  retainAgentTerminal(owner.sessionId, live.terminalId)
+  closeTerminalsForSession(owner.sessionId)
+  assert.deepEqual(getAgentTerminalCatalog(), { terminals: [], activity: [] })
+  assert.throws(() => getTerminalSnapshot(live.terminalId), /终端不存在/)
   assert.match(git('branch', '--list', 'retained-branch'), /retained-branch/)
   app.emit('will-quit')
   await assert.rejects(api.previewTurnRestore(query), /not registered/)

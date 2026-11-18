@@ -6,8 +6,10 @@
  */
 
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import { NETWORK_IPC_CHANNELS, TURN_CHANGES_IPC_CHANNELS } from '@proma/shared'
+import { PRESENT_IPC_CHANNELS, AGENT_MEMORY_IPC_CHANNEL, NETWORK_IPC_CHANNELS, TURN_CHANGES_IPC_CHANNELS } from '@proma/shared'
 import type { TurnChangesQuery, TurnFileDiffQuery, TurnChangeRecord, TurnFileDiff, TurnChangeOwner, TurnRestoreApplyInput, TurnRestorePreview, TurnRestoreResult, RemoveWorktreeInput, RemoveWorktreeResult } from '@proma/shared'
+import type { PresentTurn, PresentedResource, PresentAction, PresentActionResult, PresentReceipt, VaultDirectoryPage, VaultLocateResult, VaultWikiResolution } from '@proma/shared'
+import type { AgentMemoryReplies, AgentMemoryRequest } from '@proma/shared'
 import type { NetworkCheckInput, NetworkDiagnosticExportResult, NetworkDiagnosticPreview, NetworkStatusSnapshot } from '@proma/shared'
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, SLACK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, VAULT_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, TERMINAL_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
@@ -17,6 +19,7 @@ import type {
   Channel,
   ChannelCreateInput,
   ChannelUpdateInput,
+  RemovedChannelSummary,
   ChannelTestResult,
   ChannelDirectTestInput,
   FetchModelsInput,
@@ -47,6 +50,9 @@ import type {
   SDKMessage,
   AgentSendInput,
   AgentThinkingLevel,
+  WorkspaceSkillUsage,
+  CodexSpeed,
+  PromaNarrationMode,
   AgentStreamEvent,
   AgentStreamCompletePayload,
   AgentStreamErrorPayload,
@@ -155,6 +161,8 @@ import type {
   CreatePlanningGroupInput,
   UpdatePlanningGroupInput,
   SnoozePlanningReminderInput,
+  CreatePlanningReminderRequest,
+  UpdatePlanningReminderInput,
   PlanningNativeSyncEntity,
   PlanningNativeSyncStatus,
   PlanningNativeSyncPermissionResult,
@@ -167,6 +175,8 @@ import type {
   SavePlanningSyncProfileInput,
   AgentTerminalCloseEvent,
   AgentTerminalOpenEvent,
+  AgentTerminalActivity,
+  AgentTerminalCatalog,
   TerminalCreateInput,
   TerminalInput,
   TerminalResizeInput,
@@ -179,6 +189,7 @@ import type {
 import type {
   UserProfile,
   AppSettings,
+  LiveLocalPreferences,
   QuickTaskSubmitInput,
   QuickTaskOpenSessionData,
   VoiceDictationAudioChunkInput,
@@ -209,6 +220,7 @@ import { QUICK_TASK_IPC_CHANNELS, TRAY_IPC_CHANNELS, VOICE_DICTATION_IPC_CHANNEL
  * 暴露给渲染进程的 API 接口定义
  */
 export interface ElectronAPI {
+  agentMemory: <T extends AgentMemoryRequest>(request: T) => Promise<AgentMemoryReplies[T['action']]>
   // ===== 运行时相关 =====
 
   /**
@@ -232,6 +244,9 @@ export interface ElectronAPI {
   acknowledgeTerminalOutput: (input: TerminalOutputAck) => void
   onAgentTerminalOpen: (callback: (event: AgentTerminalOpenEvent) => void) => () => void
   onAgentTerminalClose: (callback: (event: AgentTerminalCloseEvent) => void) => () => void
+  getAgentTerminalCatalog: () => Promise<AgentTerminalCatalog>
+  retainAgentTerminal: (sessionId: string, terminalId: string) => Promise<void>
+  onAgentTerminalActivity: (callback: (event: AgentTerminalActivity) => void) => () => void
   onTerminalOutput: (callback: (event: TerminalOutputEvent) => void) => () => void
   onTerminalExit: (callback: (event: TerminalExitEvent) => void) => () => void
 
@@ -315,6 +330,8 @@ export interface ElectronAPI {
 
   /** 删除渠道 */
   deleteChannel: (id: string) => Promise<void>
+  consumeChannelRemovalNotices: () => Promise<RemovedChannelSummary[]>
+  onChannelRemoved: (callback: (channel: RemovedChannelSummary) => void) => () => void
 
   /** 解密获取明文 API Key（仅在用户查看时调用） */
   decryptApiKey: (channelId: string) => Promise<string>
@@ -450,6 +467,7 @@ export interface ElectronAPI {
 
   /** 更新用户档案 */
   updateUserProfile: (updates: Partial<UserProfile>) => Promise<UserProfile>
+  onUserProfileChanged: (callback: (profile: UserProfile) => void) => () => void
 
   // ===== 应用设置相关 =====
 
@@ -470,6 +488,7 @@ export interface ElectronAPI {
 
   /** 订阅用户手动切换主题事件（跨窗口同步，返回清理函数） */
   onThemeSettingsChanged: (callback: (payload: { themeMode: string; themeStyle: string }) => void) => () => void
+  onLiveLocalPreferencesChanged: (callback: (settings: LiveLocalPreferences) => void) => () => void
 
   // ===== Scratch Pad =====
 
@@ -499,7 +518,15 @@ export interface ElectronAPI {
   selectVault: (options?: { inboxPath?: string; allowAgentWrites?: boolean }) => Promise<VaultSummary | null>
   authorizeDiscoveredVault: (rootPath: string, options?: { inboxPath?: string; allowAgentWrites?: boolean }) => Promise<VaultSummary>
   listVaultFiles: () => Promise<VaultTreeEntry[]>
-  readVaultFile: (relativePath: string) => Promise<VaultReadResult>
+  listVaultDirectory: (vaultId: string, path: string, cursor?: string) => Promise<VaultDirectoryPage>
+  locateVaultEntry: (vaultId: string, kind: 'file' | 'folder', path: string) => Promise<VaultLocateResult>
+  openVaultFolder: (vaultId: string, path: string) => Promise<void>
+  resolveVaultWiki: (vaultId: string, target: string, source: string) => Promise<VaultWikiResolution>
+  readVaultFile: (relativePath: string, vaultId?: string) => Promise<VaultReadResult>
+  listPresentedResources: (turn: PresentTurn) => Promise<PresentedResource[]>
+  actOnPresentedResource: (input: PresentAction) => Promise<PresentActionResult>
+  finishVaultPresentation: (input: PresentReceipt) => Promise<boolean>
+  onPresentedResourcesChanged: (callback: (turn: PresentTurn) => void) => () => void
   resolveVaultMedia: (noteRelativePath: string, src: string) => Promise<import('@proma/shared').ResolvedFileUrl | null>
   saveVaultPastedImage: (input: VaultSavePastedImageInput) => Promise<{ src: string } | null>
   writeVaultFile: (input: VaultWriteInput) => Promise<VaultWriteResult>
@@ -613,6 +640,8 @@ export interface ElectronAPI {
 
   /** 切换当前会话的 ChatGPT Codex Fast Mode */
   updateSessionCodexFastMode: (sessionId: string, enabled: boolean) => Promise<AgentSessionMeta>
+  updateSessionCodexSpeed: (sessionId: string, speed: CodexSpeed) => Promise<AgentSessionMeta>
+  updateSessionNarrationMode: (sessionId: string, mode: PromaNarrationMode) => Promise<AgentSessionMeta>
 
   /** 查询 Pi catalog 或专属 profile 支持的会话级推理档位 */
   getPiReasoningCapability: (channelId: string, modelId: string) => Promise<import('@proma/shared').ReasoningCapability | undefined>
@@ -701,6 +730,7 @@ export interface ElectronAPI {
 
   /** 在丢失的本地项目原路径新建空目录。 */
   restoreAgentWorkspaceProjectRoot: (id: string) => Promise<AgentWorkspace>
+  setWorkspaceArchived: (id: string, archived: boolean) => Promise<AgentWorkspace>
 
   /** 删除 Agent 工作区 */
   deleteAgentWorkspace: (id: string) => Promise<void>
@@ -769,6 +799,7 @@ export interface ElectronAPI {
 
   /** 获取默认 Skills 的 slug 列表（来自 ~/.proma/default-skills/） */
   getDefaultSkillSlugs: () => Promise<string[]>
+  getWorkspaceSkillUsage: (workspaceSlug: string) => Promise<WorkspaceSkillUsage>
 
   /** 从其他工作区导入 Skill */
   importSkillFromWorkspace: (targetSlug: string, sourceSlug: string, skillSlug: string) => Promise<SkillMeta>
@@ -1349,7 +1380,11 @@ export interface ElectronAPI {
   deletePlanningGroup: (scope: PlanningGroupScope, id: string) => Promise<boolean>
   listPlanningTags: () => Promise<PlanningTag[]>
   listActivePlanningReminders: () => Promise<ActivePlanningReminder[]>
-  acknowledgePlanningReminder: (id: string) => Promise<PlanningReminder | undefined>
+  onPlanningQuickCapture: (callback: () => void) => () => void
+  acknowledgePlanningReminder: (id: string, occurrenceId?: string) => Promise<PlanningReminder | undefined>
+  createPlanningReminder: (input: CreatePlanningReminderRequest) => Promise<PlanningReminder>
+  updatePlanningReminder: (input: UpdatePlanningReminderInput) => Promise<PlanningReminder>
+  deletePlanningReminder: (input: Pick<UpdatePlanningReminderInput, 'id' | 'occurrenceId'>) => Promise<boolean>
   snoozePlanningReminder: (input: SnoozePlanningReminderInput) => Promise<PlanningReminder | undefined>
   onPlanningRemindersDue: (callback: (reminders: ActivePlanningReminder[]) => void) => () => void
   onPlanningChanged: (callback: (change: PlanningChange) => void) => () => void
@@ -1390,6 +1425,7 @@ export interface ElectronAPI {
  * 实现 ElectronAPI 接口
  */
 const electronAPI: ElectronAPI = {
+  agentMemory: (request) => ipcRenderer.invoke(AGENT_MEMORY_IPC_CHANNEL, request),
   // 运行时
   getRuntimeStatus: () => {
     return ipcRenderer.invoke(IPC_CHANNELS.GET_RUNTIME_STATUS)
@@ -1414,6 +1450,13 @@ const electronAPI: ElectronAPI = {
     const listener = (_event: Electron.IpcRendererEvent, event: AgentTerminalCloseEvent): void => callback(event)
     ipcRenderer.on(TERMINAL_IPC_CHANNELS.AGENT_CLOSE, listener)
     return () => ipcRenderer.removeListener(TERMINAL_IPC_CHANNELS.AGENT_CLOSE, listener)
+  },
+  getAgentTerminalCatalog: () => ipcRenderer.invoke(TERMINAL_IPC_CHANNELS.LIST_AGENT),
+  retainAgentTerminal: (sessionId, terminalId) => ipcRenderer.invoke(TERMINAL_IPC_CHANNELS.RETAIN_AGENT, sessionId, terminalId),
+  onAgentTerminalActivity: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, event: AgentTerminalActivity): void => callback(event)
+    ipcRenderer.on(TERMINAL_IPC_CHANNELS.AGENT_ACTIVITY, listener)
+    return () => ipcRenderer.removeListener(TERMINAL_IPC_CHANNELS.AGENT_ACTIVITY, listener)
   },
   onTerminalOutput: (callback: (event: TerminalOutputEvent) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, event: TerminalOutputEvent): void => callback(event)
@@ -1553,6 +1596,12 @@ const electronAPI: ElectronAPI = {
 
   deleteChannel: (id: string) => {
     return ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.DELETE, id)
+  },
+  consumeChannelRemovalNotices: () => ipcRenderer.invoke(CHANNEL_IPC_CHANNELS.CONSUME_REMOVAL_NOTICES),
+  onChannelRemoved: (callback) => {
+    const listener = (_: Electron.IpcRendererEvent, channel: RemovedChannelSummary): void => callback(channel)
+    ipcRenderer.on(CHANNEL_IPC_CHANNELS.REMOVED, listener)
+    return () => ipcRenderer.removeListener(CHANNEL_IPC_CHANNELS.REMOVED, listener)
   },
 
   decryptApiKey: (channelId: string) => {
@@ -1737,6 +1786,16 @@ const electronAPI: ElectronAPI = {
   updateUserProfile: (updates: Partial<UserProfile>) => {
     return ipcRenderer.invoke(USER_PROFILE_IPC_CHANNELS.UPDATE, updates)
   },
+  onUserProfileChanged: (callback) => {
+    const listener = (_: Electron.IpcRendererEvent, profile: UserProfile): void => callback(profile)
+    ipcRenderer.on(USER_PROFILE_IPC_CHANNELS.CHANGED, listener)
+    return () => ipcRenderer.removeListener(USER_PROFILE_IPC_CHANNELS.CHANGED, listener)
+  },
+  onLiveLocalPreferencesChanged: (callback) => {
+    const listener = (_: Electron.IpcRendererEvent, settings: LiveLocalPreferences): void => callback(settings)
+    ipcRenderer.on(SETTINGS_IPC_CHANNELS.LIVE_LOCAL_PREFERENCES_CHANGED, listener)
+    return () => ipcRenderer.removeListener(SETTINGS_IPC_CHANNELS.LIVE_LOCAL_PREFERENCES_CHANGED, listener)
+  },
 
   // 应用设置
   getSettings: () => {
@@ -1799,7 +1858,19 @@ const electronAPI: ElectronAPI = {
   selectVault: (options?: { inboxPath?: string; allowAgentWrites?: boolean }) => ipcRenderer.invoke(VAULT_IPC_CHANNELS.SELECT, options),
   authorizeDiscoveredVault: (rootPath: string, options?: { inboxPath?: string; allowAgentWrites?: boolean }) => ipcRenderer.invoke(VAULT_IPC_CHANNELS.AUTHORIZE_CANDIDATE, rootPath, options),
   listVaultFiles: () => ipcRenderer.invoke(VAULT_IPC_CHANNELS.LIST_FILES),
-  readVaultFile: (relativePath: string) => ipcRenderer.invoke(VAULT_IPC_CHANNELS.READ_FILE, relativePath),
+  listVaultDirectory: (id, path, cursor) => ipcRenderer.invoke(VAULT_IPC_CHANNELS.LIST_DIRECTORY, id, path, cursor),
+  locateVaultEntry: (id, kind, path) => ipcRenderer.invoke(VAULT_IPC_CHANNELS.LOCATE, id, kind, path),
+  openVaultFolder: (id, path) => ipcRenderer.invoke(VAULT_IPC_CHANNELS.OPEN_FOLDER, id, path),
+  resolveVaultWiki: (id, target, source) => ipcRenderer.invoke(VAULT_IPC_CHANNELS.RESOLVE_WIKI, id, target, source),
+  readVaultFile: (relativePath, id) => ipcRenderer.invoke(VAULT_IPC_CHANNELS.READ_FILE, relativePath, id),
+  listPresentedResources: turn => ipcRenderer.invoke(PRESENT_IPC_CHANNELS.LIST, turn),
+  actOnPresentedResource: input => ipcRenderer.invoke(PRESENT_IPC_CHANNELS.ACT, input),
+  finishVaultPresentation: input => ipcRenderer.invoke(PRESENT_IPC_CHANNELS.RECEIPT, input),
+  onPresentedResourcesChanged: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, turn: PresentTurn): void => callback(turn)
+    ipcRenderer.on(PRESENT_IPC_CHANNELS.CHANGED, listener)
+    return () => { ipcRenderer.removeListener(PRESENT_IPC_CHANNELS.CHANGED, listener) }
+  },
   resolveVaultMedia: (noteRelativePath: string, src: string) => ipcRenderer.invoke(VAULT_IPC_CHANNELS.RESOLVE_MEDIA, noteRelativePath, src),
   saveVaultPastedImage: (input: VaultSavePastedImageInput) => ipcRenderer.invoke(VAULT_IPC_CHANNELS.SAVE_PASTED_IMAGE, input),
   writeVaultFile: (input: VaultWriteInput) => ipcRenderer.invoke(VAULT_IPC_CHANNELS.WRITE_FILE, input),
@@ -1947,6 +2018,8 @@ const electronAPI: ElectronAPI = {
   updateSessionCodexFastMode: (sessionId: string, enabled: boolean) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_CODEX_FAST_MODE, sessionId, enabled)
   },
+  updateSessionCodexSpeed: (sessionId, speed) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_CODEX_SPEED, sessionId, speed),
+  updateSessionNarrationMode: (sessionId, mode) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.UPDATE_SESSION_NARRATION_MODE, sessionId, mode),
 
   getPiReasoningCapability: (channelId: string, modelId: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_PI_REASONING_CAPABILITY, channelId, modelId)
@@ -2069,6 +2142,7 @@ const electronAPI: ElectronAPI = {
   restoreAgentWorkspaceProjectRoot: (id: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.RESTORE_WORKSPACE_PROJECT_ROOT, id)
   },
+  setWorkspaceArchived: (id, archived) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.SET_WORKSPACE_ARCHIVED, id, archived),
 
   deleteAgentWorkspace: (id: string) => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.DELETE_WORKSPACE, id)
@@ -2162,6 +2236,7 @@ const electronAPI: ElectronAPI = {
   getDefaultSkillSlugs: () => {
     return ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_DEFAULT_SKILL_SLUGS)
   },
+  getWorkspaceSkillUsage: (workspaceSlug) => ipcRenderer.invoke(AGENT_IPC_CHANNELS.GET_SKILL_USAGE, workspaceSlug),
 
   importSkillFromWorkspace: (targetSlug: string, sourceSlug: string, skillSlug: string) => {
     return ipcRenderer.invoke(
@@ -3086,7 +3161,15 @@ const electronAPI: ElectronAPI = {
   deletePlanningGroup: (scope: PlanningGroupScope, id: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.DELETE_GROUP, scope, id),
   listPlanningTags: () => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.LIST_TAGS),
   listActivePlanningReminders: () => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.LIST_ACTIVE_REMINDERS),
-  acknowledgePlanningReminder: (id: string) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.ACKNOWLEDGE_REMINDER, id),
+  acknowledgePlanningReminder: (id, occurrenceId) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.ACKNOWLEDGE_REMINDER, id, occurrenceId),
+  onPlanningQuickCapture: (callback) => {
+    const listener = (): void => callback()
+    ipcRenderer.on(PLANNING_IPC_CHANNELS.OPEN_QUICK_CAPTURE, listener)
+    return () => ipcRenderer.removeListener(PLANNING_IPC_CHANNELS.OPEN_QUICK_CAPTURE, listener)
+  },
+  createPlanningReminder: (input: CreatePlanningReminderRequest) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.CREATE_REMINDER, input),
+  updatePlanningReminder: (input: UpdatePlanningReminderInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.UPDATE_REMINDER, input),
+  deletePlanningReminder: (input: Pick<UpdatePlanningReminderInput, 'id' | 'occurrenceId'>) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.DELETE_REMINDER, input),
   snoozePlanningReminder: (input: SnoozePlanningReminderInput) => ipcRenderer.invoke(PLANNING_IPC_CHANNELS.SNOOZE_REMINDER, input),
   onPlanningRemindersDue: (callback: (reminders: ActivePlanningReminder[]) => void) => {
     const listener = (_: Electron.IpcRendererEvent, reminders: ActivePlanningReminder[]): void => callback(reminders)

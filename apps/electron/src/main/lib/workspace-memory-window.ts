@@ -142,3 +142,9 @@ export function markWorkspaceMemoryWindowReady(workspaceSlug: string, webContent
   rendererReadyWindows.add(win)
   return true
 }
+
+/** 只有已登记的记忆窗口可以操作自己的工作区文件。 */
+export function isWorkspaceMemoryWindow(workspaceSlug: string, webContentsId: number): boolean {
+  const win = windowsByWorkspace.get(workspaceSlug)
+  return !!win && !win.isDestroyed() && win.webContents.id === webContentsId
+}

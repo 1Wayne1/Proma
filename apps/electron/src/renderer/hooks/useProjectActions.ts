@@ -93,5 +93,5 @@ export function useProjectActions(): UseProjectActionsResult {
     }
   }, [createProject])
 
-  return { workspaces, currentWorkspaceId, selectProject, createProject, createProjectFromFolder }
+  return { workspaces: workspaces.filter(workspace => !workspace.archived), currentWorkspaceId, selectProject, createProject, createProjectFromFolder }
 }

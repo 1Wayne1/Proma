@@ -1,12 +1,24 @@
 import { describe, expect, test } from 'bun:test'
 import {
   injectCodexFastMode,
+  injectCodexSpeed,
   withCodexFastModeServiceTier,
+  withCodexSpeedServiceTier,
 } from './pi-codex-request-settings'
 import { injectOpenAIReasoningLevel } from './pi-openai-reasoning-request-settings'
-import { resolveReasoningProfile } from '@proma/shared'
+import { getCodexSpeeds, resolveCodexSpeed, resolveReasoningProfile } from '@proma/shared'
 
 describe('Pi Codex request settings', () => {
+  test('Given 新旧速度字段与不同模型 When 组装请求 Then 新字段优先且极速仅发送给支持的模型', () => {
+    const standard = { model: 'gpt-6-sol' }
+    expect(resolveCodexSpeed({ codexFastMode: true }, standard.model)).toBe('fast')
+    expect(resolveCodexSpeed({ codexFastMode: true, codexSpeed: 'standard' }, standard.model)).toBe('standard')
+    expect(resolveCodexSpeed({ codexSpeed: 'ultrafast' }, standard.model)).toBe('standard')
+    expect(injectCodexSpeed(standard, 'ultrafast')).toBe(standard)
+    expect(getCodexSpeeds('gpt-6.1-sol-1')).toEqual(['standard', 'fast', 'ultrafast'])
+    expect(injectCodexSpeed({ model: 'gpt-6-astra' }, 'ultrafast')).toEqual({ model: 'gpt-6-astra', service_tier: 'ultrafast' })
+    expect(withCodexSpeedServiceTier({ transport: 'websocket' }, 'ultrafast')).toEqual({ transport: 'websocket', serviceTier: 'ultrafast' })
+  })
   test('Given OpenAI model IDs When resolving profiles Then separates standard, max, and non-reasoning models', () => {
     expect(resolveReasoningProfile({ modelId: 'gpt-5.5', transport: 'openai-responses' })?.id).toBe('openai-reasoning-standard')
     expect(resolveReasoningProfile({ modelId: 'gpt-5.6-terra', transport: 'openai-responses' })?.id).toBe('openai-reasoning-max')

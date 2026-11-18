@@ -15,6 +15,7 @@ import type {
   ChannelCreateInput,
   ChannelUpdateInput,
   ChannelsConfig,
+  RemovedChannelSummary,
   ChannelTestResult,
   ChannelDirectTestInput,
   ChannelModel,
@@ -438,6 +439,14 @@ function readConfig(): ChannelsConfig {
     const schemaMigration = migrateConfig(parsed)
     const presetModelUpdate = applyPresetModelCandidateUpdates(schemaMigration.config)
     const config = presetModelUpdate.config
+    if (schemaMigration.changed) {
+      const retainedIds = new Set(config.channels.map(channel => channel.id))
+      const notices = new Map(config.pendingRemovalNotices?.map(notice => [notice.id, notice]))
+      for (const channel of parsed.channels) {
+        if (!retainedIds.has(channel.id)) notices.set(channel.id, { id: channel.id, name: channel.name, reason: 'retired' })
+      }
+      if (notices.size) config.pendingRemovalNotices = [...notices.values()]
+    }
     if (schemaMigration.changed || presetModelUpdate.changed) {
       writeConfig(config)
       console.log('[渠道管理] 渠道配置已迁移并持久化')
@@ -463,6 +472,8 @@ function writeConfig(config: ChannelsConfig): void {
   }
 }
 
+const PLAINTEXT_API_KEY_PREFIX = 'plain:'
+
 /**
  * 加密 API Key
  *
@@ -471,12 +482,12 @@ function writeConfig(config: ChannelsConfig): void {
  * - Windows: DPAPI
  * - Linux: Secret Service API
  *
- * @returns base64 编码的加密字符串
+ * @returns base64 密文，或系统加密不可用时带标记的原值
  */
 function encryptApiKey(plainKey: string): string {
   if (!safeStorage.isEncryptionAvailable()) {
     console.warn('[渠道管理] safeStorage 加密不可用，将以明文存储')
-    return plainKey
+    return PLAINTEXT_API_KEY_PREFIX + plainKey
   }
 
   const encrypted = safeStorage.encryptString(plainKey)
@@ -486,17 +497,20 @@ function encryptApiKey(plainKey: string): string {
 /**
  * 解密 API Key
  *
- * @param encryptedKey base64 编码的加密字符串
+ * @param encryptedKey 持久化的渠道凭据
  * @returns 明文 API Key
  */
 function decryptKey(encryptedKey: string): string {
+  if (encryptedKey.startsWith(PLAINTEXT_API_KEY_PREFIX)) return encryptedKey.slice(PLAINTEXT_API_KEY_PREFIX.length)
   if (!safeStorage.isEncryptionAvailable()) {
     // 如果加密不可用，假设存储的是明文
     return encryptedKey
   }
 
+  const buffer = Buffer.from(encryptedKey, 'base64')
+  // 旧版未标记的明文可能与密文混存。历史密文总是通过 Buffer.toString('base64') 写入。
+  if (!encryptedKey || buffer.toString('base64') !== encryptedKey) return encryptedKey
   try {
-    const buffer = Buffer.from(encryptedKey, 'base64')
     return safeStorage.decryptString(buffer)
   } catch (error) {
     console.error('[渠道管理] 解密 API Key 失败:', error)
@@ -618,7 +632,16 @@ export function updateChannel(id: string, input: ChannelUpdateInput): Channel {
 /**
  * 删除渠道
  */
-export function deleteChannel(id: string): void {
+export function consumeChannelRemovalNotices(): RemovedChannelSummary[] {
+  const config = readConfig()
+  const notices = config.pendingRemovalNotices ?? []
+  if (!notices.length) return []
+  delete config.pendingRemovalNotices
+  writeConfig(config)
+  return notices
+}
+
+export function deleteChannel(id: string): RemovedChannelSummary {
   const config = readConfig()
   const index = config.channels.findIndex((c) => c.id === id)
 
@@ -630,6 +653,7 @@ export function deleteChannel(id: string): void {
   writeConfig(config)
 
   console.log(`[渠道管理] 已删除渠道: ${removed.name} (${removed.id})`)
+  return { id: removed.id, name: removed.name, reason: 'deleted' }
 }
 
 /**

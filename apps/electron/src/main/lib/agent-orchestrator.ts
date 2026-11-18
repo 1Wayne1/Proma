@@ -1,3 +1,6 @@
+import { buildPiMemoryTools } from './adapters/pi-memory-tools'
+import { buildPiPresentTool } from './adapters/pi-present-tool'
+import { presentService } from './present-runtime'
 import { assertNoProjectMutation, registerProjectActivity } from './project-mutation-guard'
 import type { ProjectActivityLease } from './project-mutation-guard'
 /**
@@ -41,6 +44,7 @@ import {
   resolveReasoningProfile,
   collectSkillActivations,
   mergeSkillActivations,
+  resolveCodexSpeed,
 } from '@proma/shared'
 import type { PromaPermissionMode, AskUserRequest, ExitPlanModeRequest, SDKSystemMessage } from '@proma/shared'
 import type { PiAgentQueryOptions } from './adapters/pi-agent-adapter'
@@ -1427,6 +1431,19 @@ export class AgentOrchestrator {
           return { behavior: 'allow' as const, updatedInput: input }
         }
 
+        if (toolName === 'MemoryRead') return { behavior: 'allow' as const, updatedInput: input }
+        if (toolName === 'MemoryWrite') {
+          if (currentMode === 'plan' || planModeEntered || automationContext || (runTriggeredBy && runTriggeredBy !== 'user')) {
+            return { behavior: 'deny' as const, message: '当前上下文没有长期记忆写入权限' }
+          }
+          if (input.scope === 'global' || ['archive', 'restore', 'migrate', 'linkInstruction'].includes(String(input.action))) {
+            return permissionService.requestSingleApproval(sessionId, toolName, input, options, (request) => {
+              this.eventBus.emit(sessionId, { kind: 'proma_event', event: { type: 'permission_request', request } })
+            })
+          }
+          return { behavior: 'allow' as const, updatedInput: input }
+        }
+
         const planningDeletionPermission = resolvePlanningDeletionPermission(
           toolName,
           currentMode,
@@ -1543,12 +1560,26 @@ export class AgentOrchestrator {
         managedWorkspaceInstructionFile,
         projectInstructions?.sources.map(({ path, content }) => ({ path, content })) ?? [],
       )
+      const memoryTools = buildPiMemoryTools({
+        // 即使 renderer 导航到其他项目，也只以当前会话持久化归属为准。
+        workspaceId: sessionMeta?.workspaceId,
+        beforeProjectFileWrite: (path, signal) => turnChangesRun?.captureBeforeWrite(path, signal),
+        isCurrent: () => {
+          if (this.activeSessions.get(sessionId) !== runGeneration || isAgentSessionDeleting(sessionId)) return false
+          const latest = getAgentSessionMeta(sessionId)
+          return !!latest && latest.workspaceId === sessionMeta?.workspaceId
+        },
+        getAccess: () => ({
+          source: automationContext ? 'automation' : runTriggeredBy ?? 'user',
+          permissionMode: planModeEntered ? 'plan' : getPermissionMode(),
+        }),
+      })
       // 每次前台对话都基于受管 memory/ 的真实缺口给出渐进引导；自动化、桥接与委派绝不主动追问。
       const projectKnowledgeMaintenanceApproved = workspaceSlug
         ? isWorkspaceProjectKnowledgeMaintenanceApproved(workspaceSlug)
         : false
       const memoryGuidance = workspaceSlug && !automationContext && !input.triggeredBy
-        ? getWorkspaceMemoryGuidance(workspaceSlug)
+        ? getWorkspaceMemoryGuidance()
         : undefined
       // Historical sessions are supplementary evidence only. Do not invite a scan
       // before a collaboration profile has been established through real dialogue.
@@ -1562,12 +1593,14 @@ export class AgentOrchestrator {
         agentCwd,
         sessionWorkbenchLayout: getSessionWorkbenchLayout(sessionMeta),
         permissionMode: initialPermissionMode,
+        narrationMode: sessionMeta?.narrationMode,
         collaborationAvailable,
         currentModelId: selectedModelId,
         projectInstructions,
         projectKnowledgeMaintenanceApproved,
         productivityTools,
         memoryGuidance,
+        memoryToolsAvailable: memoryTools.length > 0,
         memoryRefreshOpportunity,
       }) + (automationContext ? `\n\n## 定时任务执行上下文\n\n${automationContext}` : '')
       const startAutoTitleGeneration = (): void => {
@@ -1627,8 +1660,15 @@ export class AgentOrchestrator {
       assertNoProjectMutation([agentCwd, ...allAdditionalDirectories, ...(workspaceSlug ? [getProjectFilesPath(workspaceSlug)] : [])])
       projectActivity = registerProjectActivity([agentCwd, ...allAdditionalDirectories, ...(workspaceSlug ? [getProjectFilesPath(workspaceSlug)] : [])])
       this.projectActivities.set(activityKey, projectActivity)
-      const piCustomTools = [...piBuiltinTools, ...piMcpTools, ...(extensions.piCustomTools ?? [])]
       const changesTurnId = initialUserMessageUuid ?? turnChangesRetryUuid
+      let presentTurnId = changesTurnId
+      const acceptedPresentTurns = new Set(changesTurnId ? [changesTurnId] : [])
+      const presentTool = buildPiPresentTool(presentService, () => {
+        if (!presentTurnId || planModeEntered || getPermissionMode() === 'plan' ||
+          this.activeSessions.get(sessionId) !== runGeneration || isAgentSessionDeleting(sessionId)) return
+        return { sessionId, turnId: presentTurnId }
+      })
+      const piCustomTools = [...piBuiltinTools, ...piMcpTools, ...memoryTools, presentTool, ...(extensions.piCustomTools ?? [])]
       if (workspaceId && workspaceSlug && changesTurnId) {
         turnChangesRun = createTurnChangesRun({
           owner: { sessionId, workspaceId, turnId: changesTurnId },
@@ -1676,10 +1716,16 @@ export class AgentOrchestrator {
           skillWorkspaceSlug: workspaceSlug,
         } : {}),
         ...(mentionedSkills?.length ? { skillMentions: mentionedSkills } : {}),
-        onUserTurnStarted: (uuid) => { void turnChangesRun?.advance(uuid) },
+        onUserTurnStarted: (uuid) => {
+          if (!acceptedPresentTurns.has(uuid) && this.activeSessions.get(sessionId) === runGeneration) {
+            acceptedPresentTurns.add(uuid)
+            presentTurnId = uuid
+          }
+          void turnChangesRun?.advance(uuid)
+        },
         onSkillActivated: recordSkillActivation,
         ...(isCompactCommand ? { compactRequest: true } : {}),
-        ...(sessionMeta?.codexFastMode && channel.provider === 'openai-codex' ? { codexFastMode: true } : {}),
+        ...(channel.provider === 'openai-codex' ? { codexSpeed: resolveCodexSpeed(sessionMeta, selectedModelId) } : {}),
         ...(codexOAuthCredentials && {
           codexOAuthCredentials,
           onCodexOAuthCredentialsRefreshed: (credentials: CodexOAuthCredentials) => {
@@ -2325,6 +2371,7 @@ export class AgentOrchestrator {
     this.activeSessions.delete(sessionId)
     this.activeSessionStartedAt.delete(sessionId)
     this.sessionPermissionModes.delete(sessionId)
+    presentService.releaseSession(sessionId)
     browserController.cancelSession(sessionId)
     if (runGeneration != null) {
       this.stoppedBySessions.set(sessionId, runGeneration)

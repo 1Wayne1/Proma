@@ -15,35 +15,6 @@ function frontmatterEnd(doc: Text): number {
   return end
 }
 
-/** 根路径精确命中优先，其次当前目录，最后唯一后缀；仅解析 Vault 内部笔记。 */
-export function resolveVaultWikiLink(target: string, source: string, files: readonly string[]): string | null {
-  const note = target.trim().replace(/\.md$/i, '')
-  if (!note || /[#^:]/.test(note)) return null
-  const normalize = (path: string): string | null => {
-    const parts: string[] = []
-    for (const part of path.split('/')) {
-      if (part === '..') {
-        if (!parts.length) return null
-        parts.pop()
-      } else if (part && part !== '.') parts.push(part)
-    }
-    return parts.join('/')
-  }
-  const stem = (file: string): string => file.replace(/\.md$/i, '')
-  const folder = source.slice(0, source.lastIndexOf('/') + 1)
-  const relative = normalize(folder + note)
-  const root = normalize(note)
-  if (note.startsWith('./') || note.startsWith('../')) {
-    return relative === null ? null : files.find((file) => stem(file) === relative) ?? null
-  }
-  const exact = files.find((file) => stem(file) === root)
-  if (exact) return exact
-  const local = files.find((file) => stem(file) === relative)
-  if (local) return local
-  const matches = files.filter((file) => stem(file).endsWith('/' + note))
-  return matches.length === 1 ? matches[0]! : null
-}
-
 /** 使用 Markdown 语法树排除代码、HTML 和已有链接；转义与嵌入保持原样。 */
 export function canRenderVaultWikiLink(state: EditorState, from: number): boolean {
   const preceding = state.sliceDoc(state.doc.lineAt(from).from, from)

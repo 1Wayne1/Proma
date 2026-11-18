@@ -1,14 +1,14 @@
 # Proma 非云功能改造交接
 
-记录日期：2026-11-17（Asia/Shanghai）；交接记录版本：1.0.0。
+更新日期为 2026-11-18（Asia/Shanghai），交接记录版本为 1.0.8。
 
 ## 接手先看
 
-1. 仅在 **`E:\node_project\Proma`** 中修改工程；分支为 `dev/new-version-features`。不要把 Documents 下的准备目录当成主工程，也不要重新创建一份源码。
-2. 先读根目录 [AGENTS.md](../../AGENTS.md)，再读 [spec.md](../../spec.md) 第 2、3、7、8、13、15、20、21 节及本文；先运行 `git status` 确认有无后续用户改动。
-3. **下一项实现任务：S3-01（记忆目标、revision 与历史存储）。S3 尚未开始。** 不需要重做 S1/S2，也不能把 S1/S2 的夹具通过写成整体验收完成。
+1. 在当前 `dev/new-version-features` 工作区修改工程。2026-11-18 的续作目录是 macOS 的 `/Users/weibo/projects/Proma`，下文的 Windows 路径为此前实施和证据位置。
+2. 先读根目录 [AGENTS.md](../../AGENTS.md)，再读 [spec.md](../../spec.md) 第 2、3、8、9、13、15、20—26 节及本文。运行 `git status` 核对当前工作区。
+3. **从 S5-01 接手。** macOS 的 M1 主链路、受管浏览器交付、休眠唤醒和跨应用全局快捷键均已实测。Windows 暂缓。
 4. 用户明确排除 Proma 云服务。沿用 Pi、本地 JSON/JSONL、Bun、Jotai 和已有权限边界。参考安装版提供功能证据，不是要求复制其云端架构。
-5. 用户已要求卸载专用 Node 与 REA，且已执行。后续项目命令使用系统 Node；不要为继续本计划自动重装 REA 或独立 Node。
+5. 工程命令使用 Bun。此前的 Node/REA 卸载记录适用于 Windows。当前 Mac 上的 REA 已按用户要求安装，只有需要确认安装版差异时才使用。
 
 ## 当前基线与提交状态
 
@@ -22,6 +22,14 @@
 | 参考安装版 | `D:\Program Files\Proma`，静态比对版本 `0.22.80` |
 | 功能交付版本 | Electron `0.19.64`、shared `0.1.77`，已进入上述提交 |
 | 本次交接文档版本 | Electron patch `0.19.65`、spec `1.0.6`；shared 仍为 `0.1.77`。只更新文档与对应版本元数据 |
+| S3-01 当前工作区 | 基于 `5abec93c` 实现；Electron `0.19.66`、spec `1.0.7`、shared `0.1.77` |
+| S3-02 当前工作区 | Electron `0.19.67`、spec `1.0.8`、shared `0.1.78` |
+| S4-01 当前工作区 | Electron `0.19.68`、spec `1.0.9`、shared `0.1.79` |
+| S4-02 当前工作区 | Electron `0.19.69`、spec `1.0.10`、shared `0.1.80` |
+| M1 原生验收当前工作区 | Electron `0.19.70`、spec `1.0.11`、shared `0.1.80`，包含项目记忆逐轮采样及快照目录边界修复 |
+| M1 第三方 Responses 实机复测 | Electron `0.19.71`、spec `1.0.12`、shared `0.1.80`，包含渠道兼容、项目记忆初始化、并排焦点和独立 HTML 预览修复 |
+| M1 macOS 系统事件补测 | Electron `0.19.72`、spec `1.0.13`、shared `0.1.80`，修复入口热更新重复挂载并验证受管浏览器交付与休眠提醒 |
+| M1 macOS 提交基线 | Electron `0.19.72`、spec `1.0.14`、shared `0.1.80`，用户确认在其他应用中按 `⌘⇧T` 可唤出「快速记录 Todo」 |
 | 工作区 | 开始本次交接记录时干净；本次交接文档、AGENTS 入口、spec 和版本元数据另有改动，是否已提交以当前 `git status` 为准 |
 
 `spec.md` 第 16—20 节中的“未提交”、旧 Node 版本和早期构建阻塞是当时的历史记录；最新状态以第 21 节、本文和当前 Git 为准。不要为恢复旧状态执行 reset 或覆盖现有文件。
@@ -37,11 +45,13 @@
 | S2-01 | turn/file/snapshot 类型、Git/受控工具捕获、比较、私有持久化与容量限制 | 已实现，保留主根/附加根边界和 partial 信息 |
 | S2-02 | Pi 受控执行接线、追加消息分轮、重试 UUID 归属、四层查询与逐轮 diff 面板 | 已实现，捕获在原权限 allow 之后、工具执行之前 |
 | S2-03 | 单文件恢复预览/应用、冲突保护、worktree 移除、监听引用计数和快照清理 | 已实现，本地测试与构建通过；真实 Electron/模型流程待验收 |
-| S3-01 | 记忆目标、revision、历史存储 | **未开始，下一项实现任务** |
-| S3-02、S4 | 记忆工具/UI/迁移；Present、Vault、本地工作流增强 | 未开始 |
+| S3-01 | 记忆目标、revision、历史存储 | 已实现，macOS 定向回归与类型检查通过 |
+| S3-02 | 记忆工具、编辑/搜索/历史界面、归档、旧记忆导入与指令关联 | 已实现，macOS 定向回归、浏览器夹具、main/preload 夹具、类型检查及完整构建通过 |
+| S4-01 | 交付卡片、Vault 分页与导航、受管浏览器展示 | 已实现，定向回归、浏览器夹具、类型检查和构建通过 |
+| S4-02 | 提醒及全局快捷捕获、终端活动、项目归档、会话配置和设置同步 | 已实现，验证记录见规格第 25 节 |
 | S5、S6、S7 | 自身界面操作、Windows Computer Use、集成与发布 | 未开始；不能预先宣告驱动或安装包可用 |
 
-M1 要求 S1—S4 的可用闭环，S3/S4 尚未实现；M2 要求 S5/S6 Windows 实机验收；M3 要求 S7 发布验收。当前都没有达到完成定义。
+M1 的 macOS 主链路通过实机验收。M2 待 S5/S6 在 Windows 上实机验收，M3 待 S7 发布验收。
 
 ## 已实现代码入口与必须保留的行为
 
@@ -58,6 +68,8 @@ M1 要求 S1—S4 的可用闭环，S3/S4 尚未实现；M2 要求 S5/S6 Windows
 | 逐轮 diff/恢复 UI | `renderer/components/agent/{TurnChangesPanel,TurnRestoreControls}.tsx`、对应 Jotai atoms |
 | worktree/目录/终端 | `main/lib/{worktree-removal,project-mutation-guard,directory-watch-subscriptions,workspace-resource-events,workspace-watcher,terminal-service}.ts`、`renderer/components/diff/WorktreeSelector.tsx` |
 | 原子写 | `apps/electron/src/main/lib/safe-file.ts`，包含原始字节原子写和排他新增提交 |
+| 文件交付 | `main/lib/{present-service,present-ipc,present-runtime}.ts`、`renderer/components/agent/PresentedResources.tsx` |
+| Vault 与浏览器展示 | `main/lib/{vault-service,browser-preview-service,browser-controller}.ts`、`renderer/components/vault/{VaultView.tsx,useVaultDirectoryPages.ts}` |
 
 上表 `main/`、`renderer/`、`preload/` 均在 `apps/electron/src/` 内；花括号只是文件定位简写，不是 PowerShell 命令。
 
@@ -70,7 +82,17 @@ M1 要求 S1—S4 的可用闭环，S3/S4 尚未实现；M2 要求 S5/S6 Windows
 - 私有快照位于主配置根下的 `turn-changes`，不在项目内：每个输入最近 10 次；已完成记录保留 30 天；不再活动的 recording 遗留超过 24 小时可清理。删除会话先 stopAndDrain。损坏数据保留并报告，单次扫描 10000 条上限必须标记 partial。
 - Pi 的 native retry 补丁仍需保留；MCP 有副作用调用与模型任务不能因恢复器失败被自动重放。用户项目 AGENTS 仍只通过已验证显式项目根注入。
 
-## 下一项 S3-01：建议直接从这里继续
+## M1 验收结果
+
+原生 Electron 与 Pi 已使用用户提供的第三方 OpenAI Responses 渠道完成真实流式响应、重启续接、MCP、差异恢复、项目记忆、独立预览和受管浏览器交付。真实休眠期间到期的合成提醒只投递一次，用户实测跨应用全局快捷键通过。macOS 验收记录见规格第 26 节。官方 Codex OAuth 已移出此次验收范围。Windows 暂缓。
+
+## S3-02 原切入记录
+
+S3-01 入口在 `apps/electron/src/main/lib/agent-memory.ts`、`agent-memory-targets.ts` 与 `agent-memory.test.ts`。从主进程可验证的会话/工作区归属解析目标；Pi 工具和 renderer 不得传任意根目录或自行声明写入权限。优先接通搜索和读写，再接历史恢复预览和带备份的幂等迁移。受管工作区的旧编辑入口应逐步复用新服务，避免同一实际文件有两套写入语义。
+
+最新 macOS 验证执行 `bun test`，文件为记忆服务、项目指令解析、权限服务、会话管理、Agent 运行环境、逐轮恢复共 6 个，66 pass / 0 fail。全仓库 `bun run typecheck` 的 6 个工作区均通过。Windows 与真实 Electron/模型流程仍待验收。新存储布局和限制见规格第 22 节。
+
+## S3-01 原切入记录
 
 规格依据是 `spec.md` 第 8 节；本节是接手切入顺序，不代表新服务已经实现。
 

@@ -405,6 +405,9 @@ export interface PersistedTabSettings {
   activeTabId: string | null
 }
 
+/** 跨窗口即时同步的展示偏好。 */
+export type LiveLocalPreferences = Pick<AppSettings, 'markdownFontSize' | 'shortcutOverrides'>
+
 /** 设置 IPC 通道 */
 export const SETTINGS_IPC_CHANNELS = {
   GET: 'settings:get',
@@ -414,6 +417,7 @@ export const SETTINGS_IPC_CHANNELS = {
   ON_SYSTEM_THEME_CHANGED: 'settings:system-theme-changed',
   /** 用户手动切换主题时广播给所有窗口 */
   ON_THEME_SETTINGS_CHANGED: 'settings:theme-settings-changed',
+  LIVE_LOCAL_PREFERENCES_CHANGED: 'settings:live-local-preferences-changed',
 } as const
 
 /** Scratch Pad IPC 通道 */

@@ -120,6 +120,7 @@ import { getSlackConfig } from './lib/slack-config'
 import { wechatBridge } from './lib/wechat-bridge'
 import { getWeChatConfig } from './lib/wechat-config'
 import { createQuickTaskWindow, toggleQuickTaskWindow, destroyQuickTaskWindow } from './lib/quick-task-window'
+import { PLANNING_IPC_CHANNELS } from '@proma/shared'
 import { getAgentStatusHoverWindow, destroyAgentStatusHoverWindow } from './agent-status-hover-window'
 import { handleNativeAgentIslandEvent, initAgentIslandService, disposeAgentIslandService, publishAgentIslandNow } from './lib/agent-island-service'
 import { disposeMacAgentIslandNativeHost, startMacAgentIslandNativeHost, isMacAgentIslandNativeHostReady } from './lib/mac-agent-island-native-host'
@@ -850,6 +851,11 @@ async function bootstrap(): Promise<void> {
   )
   safeRun('registerGlobalShortcut:show-main-window', () =>
     registerGlobalShortcut('show-main-window', showAndFocusMainWindow),
+  )
+  safeRun('registerGlobalShortcut:quick-capture-todo', () =>
+    registerGlobalShortcut('quick-capture-todo', () => {
+      if (getSettings().productivityTools.todosEnabled) sendToMainWindow(PLANNING_IPC_CHANNELS.OPEN_QUICK_CAPTURE)
+    }),
   )
   safeRun('registerGlobalShortcut:voice-dictation', () =>
     registerGlobalShortcut('voice-dictation', () => {

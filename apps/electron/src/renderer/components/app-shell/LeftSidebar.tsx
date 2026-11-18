@@ -9,9 +9,9 @@
  */
 
 import * as React from 'react'
-import { useAtom, useSetAtom, useAtomValue, useStore } from 'jotai'
+import { atom, useAtom, useSetAtom, useAtomValue, useStore } from 'jotai'
 import { toast } from 'sonner'
-import { Pin, PinOff, Star, Settings, Plus, CirclePlus, Trash2, Pencil, PanelLeft, PanelRight, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, FolderInput, FolderPlus, Clock, CalendarDays, ChevronRight, ChevronDown, ChevronUp, ChevronsDownUp, Blocks, Brain, ListTodo, GitBranch, Download, Loader2, RotateCw, Info } from 'lucide-react'
+import { Pin, PinOff, Star, Settings, Plus, CirclePlus, Trash2, Pencil, PanelLeft, PanelRight, ArrowRightLeft, Search, Archive, ArchiveRestore, ArrowLeft, Bot, MessageSquare, MoreHorizontal, FolderOpen, FolderInput, FolderPlus, Clock, CalendarDays, ChevronRight, ChevronDown, ChevronUp, ChevronsDownUp, Blocks, Brain, ListTodo, GitBranch, Terminal, Download, Loader2, RotateCw, Info } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { ModeSwitcher } from './ModeSwitcher'
@@ -49,6 +49,8 @@ import {
   agentWorkspacesAtom,
   workspaceCapabilitiesVersionAtom,
   agentDiffPanelTabAtom,
+  agentTerminalActivityAtom,
+  getTerminalSidePanelTab,
   agentDiffRefreshVersionAtom,
   agentDiffUnseenChangesAtom,
   agentDiffUnseenFilesAtom,
@@ -649,7 +651,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
   const [newProjectName, setNewProjectName] = React.useState('')
   const newProjectInputRef = React.useRef<HTMLInputElement>(null)
   const [relativeTimeNow, setRelativeTimeNow] = React.useState(() => Date.now())
-  const [userProfile, setUserProfile] = useAtom(userProfileAtom)
+  const userProfile = useAtomValue(userProfileAtom)
   const streamingIds = useAtomValue(streamingConversationIdsAtom)
   const mode = useAtomValue(appModeAtom)
   const isMac = React.useMemo(() => detectIsMac(), [])
@@ -696,6 +698,9 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
   const setSessionPathMap = useSetAtom(agentSessionPathMapAtom)
   const [currentWorkspaceId, setCurrentWorkspaceId] = useAtom(currentAgentWorkspaceIdAtom)
   const [workspaces, setWorkspaces] = useAtom(agentWorkspacesAtom)
+  const activeWorkspaces = React.useMemo(() => workspaces.filter(workspace => !workspace.archived), [workspaces])
+  const archivedWorkspaceIds = React.useMemo(() => new Set(workspaces.filter(workspace => workspace.archived).map(workspace => workspace.id)), [workspaces])
+
   const setMode = useSetAtom(appModeAtom)
 
   // 当前项目能力（MCP + Skill 计数）
@@ -941,13 +946,14 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
       if (viewMode !== 'active') return []
       const filtered = agentSessions.filter((s) =>
         s.pinned
+        && !archivedWorkspaceIds.has(s.workspaceId ?? '')
         && !s.isDraft
         && !draftSessionIds.has(s.id)
         && !hasPinnedVisibleParent(s, agentSessions)
       )
       return sortAgentSessionsByUpdatedAtDesc(filtered)
     },
-    [agentSessions, viewMode, draftSessionIds]
+    [agentSessions, viewMode, draftSessionIds, archivedWorkspaceIds]
   )
 
   const pinnedAgentSessionTrees = React.useMemo<AgentSessionTreeItem[]>(
@@ -985,7 +991,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
 
   /** 已归档 Agent 会话数量由主进程轻量统计返回，active 视图不扫描归档元数据。 */
 
-  // 初始加载对话列表 + 用户档案
+  // 初始加载对话列表
   React.useEffect(() => {
     window.electronAPI
       .listConversations()
@@ -993,12 +999,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
         setConversations(list)
       })
       .catch(console.error)
-    window.electronAPI
-      .getUserProfile()
-      .then(setUserProfile)
-      .catch(console.error)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setConversations, setUserProfile])
+  }, [setConversations])
 
   // 窗口聚焦时重新同步列表，修复长时间后前后端不一致
   React.useEffect(() => {
@@ -1276,7 +1277,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
   /** 在指定项目中创建 Agent 会话；未指定时使用当前项目 */
   const createAgentSessionInWorkspace = React.useCallback(async (workspaceId?: string): Promise<void> => {
     try {
-      const targetWorkspaceId = workspaceId ?? currentWorkspaceId ?? undefined
+      const targetWorkspaceId = workspaceId ?? (currentWorkspaceId && !archivedWorkspaceIds.has(currentWorkspaceId) ? currentWorkspaceId : activeWorkspaces[0]?.id)
       if (targetWorkspaceId && targetWorkspaceId !== currentWorkspaceId) {
         setCurrentWorkspaceId(targetWorkspaceId)
         window.electronAPI.updateSettings({ agentWorkspaceId: targetWorkspaceId }).catch(console.error)
@@ -1312,7 +1313,24 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
     } catch (error) {
       console.error('[侧边栏] 创建 Agent 会话失败:', error)
     }
-  }, [agentChannelId, agentModelId, currentWorkspaceId, openSession, setActiveView, setAgentSessions, setCurrentWorkspaceId, setSessionChannelMap, setSessionModelMap])
+  }, [activeWorkspaces, agentChannelId, agentModelId, archivedWorkspaceIds, currentWorkspaceId, openSession, setActiveView, setAgentSessions, setCurrentWorkspaceId, setSessionChannelMap, setSessionModelMap])
+
+  const setProjectArchived = React.useCallback(async (workspaceId: string, archived: boolean): Promise<void> => {
+    try {
+      const updated = await window.electronAPI.setWorkspaceArchived(workspaceId, archived)
+      setWorkspaces(items => items.map(item => item.id === updated.id ? { ...item, ...updated } : item))
+      if (archived && workspaceId === currentWorkspaceId) {
+        const fallbackId = activeWorkspaces.find(workspace => workspace.id !== workspaceId)?.id
+        if (fallbackId) {
+          setCurrentWorkspaceId(fallbackId)
+          await window.electronAPI.updateSettings({ agentWorkspaceId: fallbackId })
+        }
+      }
+      toast.success(archived ? '项目已归档' : '项目已恢复')
+    } catch (error) {
+      toast.error(archived ? '无法归档项目' : '无法恢复项目', { description: error instanceof Error ? error.message : String(error) })
+    }
+  }, [activeWorkspaces, currentWorkspaceId, setCurrentWorkspaceId, setWorkspaces])
 
   /** 切换当前项目；点击当前已选中工作区标题时则折叠/展开其会话列表 */
   const handleSelectProject = React.useCallback((workspaceId: string): void => {
@@ -1360,8 +1378,8 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
   }, [])
 
   const canDeleteWorkspace = React.useCallback(
-    (workspace: AgentWorkspace): boolean => workspace.slug !== 'default' && workspaces.length > 1,
-    [workspaces.length],
+    (workspace: AgentWorkspace): boolean => workspace.slug !== 'default' && activeWorkspaces.some(item => item.id !== workspace.id),
+    [activeWorkspaces],
   )
 
   /** 请求删除项目（弹出二次确认框） */
@@ -2227,7 +2245,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
         )
       )
 
-      const defaultWsId = workspaces.find((ws) => ws.slug === 'default')?.id ?? workspaces[0]?.id
+      const defaultWsId = activeWorkspaces.find(ws => ws.slug === 'default')?.id ?? activeWorkspaces[0]?.id
       for (const session of visibleHistory) {
         const targetId = session.workspaceId && sessionsByWorkspaceId.has(session.workspaceId)
           ? session.workspaceId
@@ -2236,12 +2254,9 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
         sessionsByWorkspaceId.get(targetId)!.push(session)
       }
 
-      return workspaces.map((workspace) => ({
-        workspace,
-        sessions: sessionsByWorkspaceId.get(workspace.id) ?? [],
-      }))
+      return activeWorkspaces.map(workspace => ({ workspace, sessions: sessionsByWorkspaceId.get(workspace.id) ?? [] }))
     },
-    [agentSessions, draftSessionIds, workspaces],
+    [activeWorkspaces, agentSessions, draftSessionIds, workspaces],
   )
 
   /**
@@ -2702,6 +2717,11 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
                     />
                   )}
                 </button>
+                {group.workspace?.archived && (
+                  <button type="button" className="mr-1 shrink-0 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => void setProjectArchived(group.id, false)}>
+                    恢复项目
+                  </button>
+                )}
               </div>
             </section>
           </div>
@@ -2781,7 +2801,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
       }
     }
     return rows
-  }, [activeDelegationSessionId, activeSessionId, agentIndicatorMap, archivedAgentSessionProjectGroups, collapsedDelegationParentIds, currentWorkspaceId, expandedArchivedProjectIds, expandedDelegationParentIds, handleAgentRename, handleRequestDelete, handleRequestMove, handleSelectAgentSession, handleToggleArchiveAgent, handleToggleArchivedProject, handleToggleDelegationParent, handleTogglePinAgent, handleToggleStarAgent, relativeTimeNow, sessionHoverPreviewEnabled, workspaceNameMap])
+  }, [activeDelegationSessionId, activeSessionId, agentIndicatorMap, archivedAgentSessionProjectGroups, collapsedDelegationParentIds, currentWorkspaceId, expandedArchivedProjectIds, expandedDelegationParentIds, handleAgentRename, handleRequestDelete, handleRequestMove, handleSelectAgentSession, handleToggleArchiveAgent, handleToggleArchivedProject, handleToggleDelegationParent, handleTogglePinAgent, handleToggleStarAgent, relativeTimeNow, sessionHoverPreviewEnabled, setProjectArchived, workspaceNameMap])
 
   const agentActiveVirtualRows = React.useMemo<VirtualSidebarRow[]>(() => {
     if (viewMode !== 'active') return []
@@ -3021,6 +3041,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
               onRenameWorkspace={isAuto ? noopAsync : handleWorkspaceRename}
               onRelinkProjectRoot={isAuto ? noopAsync : handleRelinkProjectRoot}
               onRequestRestoreProjectRoot={isAuto ? noopVoid : setPendingRestoreProjectRootId}
+              onArchiveWorkspace={isAuto ? undefined : setProjectArchived}
               onRequestDeleteWorkspace={isAuto ? noopVoid : handleRequestDeleteWorkspace}
               canDeleteWorkspace={isAuto ? false : canDeleteWorkspace(group.workspace)}
               onSelectSession={handleSelectAgentSession}
@@ -3132,6 +3153,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
     relativeTimeNow,
     sessionHoverPreviewEnabled,
     setPendingRestoreProjectRootId,
+    setProjectArchived,
     workspaceNameMap,
     currentWorkspaceId,
     viewMode,
@@ -3610,7 +3632,7 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
           {viewMode === 'archived' && (
             <div className="px-6 pt-3 pb-1">
               <div className="text-[12px] font-medium text-foreground/40">
-                已归档{mode === 'agent' ? '会话' : '对话'}
+                已归档{mode === 'agent' ? '项目与会话' : '对话'}
               </div>
             </div>
           )}
@@ -3651,13 +3673,13 @@ export function LeftSidebar({ width, noTransition }: LeftSidebarProps): React.Re
                 <span>已归档 ({archivedConversationCount})</span>
               </button>
             )}
-            {mode === 'agent' && archivedAgentSessionCount > 0 && (
+            {mode === 'agent' && (archivedAgentSessionCount > 0 || archivedWorkspaceIds.size > 0) && (
               <button
                 onClick={() => setViewMode('archived')}
                 className="w-full flex items-center gap-2 px-3 py-2 rounded-[10px] text-[12px] text-foreground/40 hover:bg-foreground/[0.04] hover:text-foreground/60 transition-colors titlebar-no-drag"
               >
                 <Archive size={13} className="text-foreground/30" />
-                <span>已归档 ({archivedAgentSessionCount})</span>
+                <span>已归档 ({archivedAgentSessionCount + archivedWorkspaceIds.size})</span>
               </button>
             )}
           </>
@@ -4203,6 +4225,9 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
   const [menuOpen, setMenuOpen] = React.useState(false)
   const [rowHovered, setRowHovered] = React.useState(false)
   const store = useStore()
+  const activityAtom = React.useMemo(() => atom(get => get(agentTerminalActivityAtom).get(session.id)), [session.id])
+  const activeTerminalIds = useAtomValue(activityAtom)
+
   const inputRef = React.useRef<HTMLInputElement>(null)
   const justStartedEditing = React.useRef(false)
   // 菜单打开时关闭迷你地图预览，避免预览面板盖住菜单项导致点不动
@@ -4426,6 +4451,14 @@ const AgentSessionItem = React.memo(function AgentSessionItem({
                 >
                   {session.title}
                 </span>
+                {!!activeTerminalIds?.length && (
+                  <button type="button" className="shrink-0 rounded p-0.5 text-emerald-600 hover:bg-muted dark:text-emerald-400" aria-label={`查看 ${activeTerminalIds.length} 个运行中的 Agent 终端`} onClick={event => {
+                    event.stopPropagation()
+                    onSelect(session.id, session.title)
+                    store.set(agentSidePanelOpenAtomFamily(session.id), true)
+                    store.set(agentDiffPanelTabAtom, tabs => new Map(tabs).set(session.id, getTerminalSidePanelTab(activeTerminalIds[0]!)))
+                  }}><Terminal size={13} /></button>
+                )}
                 <SafeTooltip content={session.starred ? '取消星标' : '添加星标'} side="top">
                   <button
                     type="button"
@@ -4695,6 +4728,7 @@ interface AgentProjectGroupItemProps {
   onRenameWorkspace: (workspaceId: string, newName: string) => Promise<void>
   onRelinkProjectRoot: (workspaceId: string) => Promise<void>
   onRequestRestoreProjectRoot: (workspaceId: string) => void
+  onArchiveWorkspace?: (workspaceId: string, archived: boolean) => Promise<void>
   onRequestDeleteWorkspace: (workspaceId: string) => void
   canDeleteWorkspace: boolean
   onSelectSession: (id: string, title: string) => void
@@ -4738,6 +4772,7 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
   onRenameWorkspace,
   onRelinkProjectRoot,
   onRequestRestoreProjectRoot,
+  onArchiveWorkspace,
   onRequestDeleteWorkspace,
   canDeleteWorkspace,
   onSelectSession,
@@ -4963,6 +4998,13 @@ const AgentProjectGroupItem = React.memo(function AgentProjectGroupItem({
               </>
             )}
             <DropdownMenuSeparator className="my-0.5" />
+            {onArchiveWorkspace && <DropdownMenuItem
+              className="text-xs py-1 [&>svg]:size-3.5"
+              onSelect={() => void onArchiveWorkspace(group.workspace.id, true)}
+            >
+              <Archive size={14} />
+              归档项目
+            </DropdownMenuItem>}
             <DropdownMenuItem
               disabled={!canDeleteWorkspace}
               className={cn(

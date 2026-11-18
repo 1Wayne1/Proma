@@ -1188,12 +1188,6 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     flushBrowserTabSelection()
   }, [flushBrowserTabSelection, markDelegationSessionViewed, onTabChange, previewFiles, sessionId, setPreviewFileMap, sideChatConversationId, sideDelegationSessionId, sideTemporaryAgents, split, updateSplit])
 
-  // Agent/浏览器等外部事件仍只更新兼容 activeTab；分屏时把新目标落到当前焦点 Pane。
-  React.useEffect(() => {
-    if (!split || getFocusedRightWorkspaceTab(split) === effectiveActiveTab) return
-    updateSplit(selectRightWorkspaceSplitTab(split, effectiveActiveTab))
-  }, [effectiveActiveTab, split, updateSplit])
-
   const handleOpenBrowserTab = React.useCallback(async () => {
     try {
       const state = browserState
@@ -1336,7 +1330,8 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
   React.useEffect(() => {
     if (!split) return
     const availableTabs = new Set<AgentSidePanelTab>(workspaceTabs.map((tab) => tab.id))
-    const resolution = sanitizeRightWorkspaceSplit(split, availableTabs)
+    // 在同一次同步中应用外部焦点并修复失效标签，避免旧焦点覆盖交付等外部请求。
+    const resolution = sanitizeRightWorkspaceSplit(split, availableTabs, effectiveActiveTab)
     if (resolution.split === split && resolution.activeTab === effectiveActiveTab) return
     updateSplit(resolution.split)
     if (resolution.activeTab !== effectiveActiveTab) onTabChange(resolution.activeTab)
@@ -1573,7 +1568,7 @@ export function SidePanel({ sessionId, sessionPath, activeTab, onTabChange, widt
     if (paneTerminal) {
       return (
         <div className="min-h-0 flex-1 overflow-hidden">
-          <TerminalTabContent terminalId={paneTerminal.terminalId} sessionId={sessionId} cwd={paneTerminal.cwd ?? sessionPath ?? undefined} terminateOnUnmount={false} />
+          <TerminalTabContent terminalId={paneTerminal.terminalId} sessionId={sessionId} agentOwned={paneTerminal.agentOwned} cwd={paneTerminal.cwd ?? sessionPath ?? undefined} terminateOnUnmount={false} />
         </div>
       )
     }

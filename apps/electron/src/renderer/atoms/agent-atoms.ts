@@ -771,11 +771,13 @@ export function getPreviewIdFromSidePanelTab(tab: AgentSidePanelTab | 'preview')
 export interface AgentTerminalTab {
   terminalId: string
   title: string
+  agentOwned?: boolean
   /** 用户从 Worktree 入口打开时，终端固定在对应根目录。 */
   cwd?: string
 }
 
 export const agentTerminalTabsAtom = atom<Map<string, AgentTerminalTab[]>>(new Map())
+export const agentTerminalActivityAtom = atom<Map<string, string[]>>(new Map())
 
 export function getTerminalSidePanelTab(terminalId: string): AgentSidePanelTab {
   return `terminal:${terminalId}`

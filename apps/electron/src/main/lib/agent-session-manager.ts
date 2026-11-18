@@ -45,7 +45,7 @@ import type {
   AgentActiveWorktree,
   SessionWorkbenchLayout,
 } from '@proma/shared'
-import { migratePermissionMode, mergeSkillActivations, findBestSearchMatch, insertTopSearchResult } from '@proma/shared'
+import { isCodexSpeed, migratePermissionMode, mergeSkillActivations, findBestSearchMatch, insertTopSearchResult } from '@proma/shared'
 import { getConversationMessages } from './conversation-manager'
 // 旧格式 → SDKMessage 的转换逻辑下沉到 @proma/session-core 作为唯一真源，避免主进程与渲染层各存一份。
 import { convertLegacyMessage } from '@proma/session-core'
@@ -64,8 +64,9 @@ interface AgentSessionsIndex {
   openAIThinkingDefaultEnabledMigrationCompleted?: boolean
 }
 
-/** 当前索引版本：v2 将 Claude runtime 退役为 Pi-only。 */
-const INDEX_VERSION = 2
+const PI_ONLY_INDEX_VERSION = 2
+/** v3 将旧的布尔速度映射为档位，并保留旧字段以供恢复。 */
+const INDEX_VERSION = 3
 
 // 删除中的会话 ID 在应用生命周期内不可复用。先写入墓碑可让尚在异步预检、
 // 终止或持久化阶段的旧运行安全收束，而不会在文件删除后重新创建该会话。
@@ -189,7 +190,7 @@ function migrateLegacyOpenAIThinkingDefault(index: AgentSessionsIndex): boolean 
  */
 function migrateRetiredClaudeRuntime(index: AgentSessionsIndex): boolean {
   let changed = false
-  const treatMissingRuntimeAsLegacy = index.version < INDEX_VERSION
+  const treatMissingRuntimeAsLegacy = index.version < PI_ONLY_INDEX_VERSION
   for (const session of index.sessions) {
     const raw = session as AgentSessionMeta & { agentRuntime?: unknown }
     const runtime = raw.agentRuntime
@@ -259,7 +260,13 @@ function readIndex(): AgentSessionsIndex {
     const permissionModeMigrated = migrateLegacyPermissionMode(data)
     const thinkingDefaultMigrated = migrateLegacyOpenAIThinkingDefault(data)
     const retiredClaudeRuntimeMigrated = migrateRetiredClaudeRuntime(data)
-    if (permissionModeMigrated || thinkingDefaultMigrated || retiredClaudeRuntimeMigrated || data.version < INDEX_VERSION) {
+    let codexSpeedMigrated = false
+    for (const session of data.sessions) {
+      if (isCodexSpeed(session.codexSpeed) || typeof session.codexFastMode !== 'boolean') continue
+      session.codexSpeed = session.codexFastMode ? 'fast' : 'standard'
+      codexSpeedMigrated = true
+    }
+    if (permissionModeMigrated || thinkingDefaultMigrated || retiredClaudeRuntimeMigrated || codexSpeedMigrated || data.version < INDEX_VERSION) {
       data.version = INDEX_VERSION
       // writeIndex 会按写入后的文件状态刷新缓存。
       writeIndex(data)
@@ -612,7 +619,7 @@ export function getAgentSessionSDKMessages(id: string): SDKMessage[] {
  */
 export function updateAgentSessionMeta(
   id: string,
-  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'piSessionFile' | 'piEntryBindings' | 'codexFastMode' | 'reasoningLevel' | 'openAIThinkingLevel' | 'workspaceId' | 'activeWorktree' | 'pinned' | 'starred' | 'archived' | 'isDraft' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'explorationParentSessionId' | 'explorationSourceMessageId' | 'explorationSourceLabel' | 'explorationTitleInitializedAt' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal'>>,
+  updates: Partial<Pick<AgentSessionMeta, 'title' | 'channelId' | 'modelId' | 'sdkSessionId' | 'piSessionFile' | 'piEntryBindings' | 'codexFastMode' | 'codexSpeed' | 'narrationMode' | 'reasoningLevel' | 'openAIThinkingLevel' | 'workspaceId' | 'activeWorktree' | 'pinned' | 'starred' | 'archived' | 'isDraft' | 'attachedDirectories' | 'attachedFiles' | 'forkSourceDir' | 'explorationParentSessionId' | 'explorationSourceMessageId' | 'explorationSourceLabel' | 'explorationTitleInitializedAt' | 'stoppedByUser' | 'permissionMode' | 'completedButUnconfirmed' | 'sourceAutomationId' | 'automationGraduated' | 'parentSessionId' | 'rootSessionId' | 'sourceDelegationId' | 'delegationRole' | 'delegationStatus' | 'delegationDepth' | 'delegationGoal'>>,
 ): AgentSessionMeta {
   const index = readIndex()
   const idx = index.sessions.findIndex((s) => s.id === id)

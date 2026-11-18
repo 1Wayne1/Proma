@@ -61,6 +61,7 @@ type BrowserTabRecord = {
   /** 防止 UI 与 Agent 在同一 Tab 上交错下发命令。 */
   commandTail: Promise<void>
   isLocalPreview: boolean
+  previewLease?: { url: string; release: () => void }
   /** 仅表示来源：由 Agent 创建的标签始终保留标识，不随当前工作标签切换而丢失。 */
   openedByAgent: boolean
   /** 此标签是页面 window.open / target=_blank 创建的真实 child window。 */
@@ -557,7 +558,7 @@ export class BrowserController {
 
   private installPreviewProtocol(browserSession: Session): void {
     if (this.previewProtocolSessions.has(browserSession)) return
-    browserSession.protocol.handle('proma-file', handlePromaFileRequest)
+    browserSession.protocol.handle('proma-file', request => handlePromaFileRequest(request, browserSession))
     this.previewProtocolSessions.add(browserSession)
   }
 
@@ -662,7 +663,7 @@ export class BrowserController {
           tab.popupInitialNavigationPending = false
           return
         }
-        if (isAuthorizedPreviewProtocol(url) && tab.isLocalPreview) return
+        if (isAuthorizedPreviewProtocol(url) && tab.isLocalPreview && tab.previewLease && new URL(url).hostname === new URL(tab.previewLease.url).hostname) return
         assertSafeBrowserUrl(url)
       } catch {
         event.preventDefault()
@@ -695,7 +696,8 @@ export class BrowserController {
     })
     view.webContents.on('did-stop-loading', () => this.updateNavigationState(browserSession, tab))
     view.webContents.on('page-title-updated', () => this.updateNavigationState(browserSession, tab))
-    view.webContents.on('did-navigate', () => {
+    view.webContents.on('did-navigate', (_event, url) => {
+      if (tab.previewLease && !isAuthorizedPreviewProtocol(url)) this.releasePreview(tab)
       // 只在主框架真正完成跨文档导航时清理旧站点图标；新页面随后会通过 page-favicon-updated 重新发布。
       tab.favicon = null
       tab.popupInitialNavigationPending = false
@@ -704,6 +706,7 @@ export class BrowserController {
     })
     view.webContents.on('did-navigate-in-page', () => { tab.popupInitialNavigationPending = false; this.invalidateTabDocument(tab); this.updateNavigationState(browserSession, tab) })
     view.webContents.on('destroyed', () => {
+      this.releasePreview(tab)
       if (!browserSession.tabs.has(tab.tabId)) return
       browserSession.tabs.delete(tab.tabId)
       browserSession.lastLayoutRevisionByTab.delete(tab.tabId)
@@ -1047,7 +1050,14 @@ export class BrowserController {
     }
   }
 
+  private releasePreview(tab: BrowserTabRecord): void {
+    tab.previewLease?.release()
+    tab.previewLease = undefined
+    tab.isLocalPreview = false
+  }
+
   private disposeTab(browserSession: BrowserSessionRecord, tab: BrowserTabRecord): void {
+    this.releasePreview(tab)
     if (!browserSession.tabs.has(tab.tabId)) return
     browserSession.tabs.delete(tab.tabId)
     browserSession.lastLayoutRevisionByTab.delete(tab.tabId)
@@ -1145,33 +1155,49 @@ export class BrowserController {
     return structuredClone(this.buildState(browserSession))
   }
 
-  async previewOpen(sessionId: string, inputPath: string, tabId: string | undefined, allowedRoots: string[], baseDir?: string, signal?: AbortSignal): Promise<BrowserViewState> {
-    const browserSession = this.getOrCreateSession(sessionId, allowedRoots)
-    const releaseAgentOperation = this.acquireAgentOperation(browserSession)
+  async previewOpen(sessionId: string, inputPath: string, tabId: string | undefined, allowedRoots: string[], baseDir?: string,
+    signal?: AbortSignal, presentation?: { validate: () => void; onTabCreated: (tabId: string) => void }): Promise<BrowserViewState> {
+    this.assertRiskDisclaimerAcknowledged()
+    throwIfBrowserOperationAborted(signal)
+    presentation?.validate()
+    const browserSession = this.sessions.get(sessionId) ?? this.createSession(sessionId, presentation ? [] : allowedRoots)
+    const releaseOperation = this.acquireAgentOperation(browserSession)
+    let preview: ReturnType<typeof createAuthorizedPreviewUrl> | undefined
+    let tab: BrowserTabRecord | undefined
     try {
-      this.assertRiskDisclaimerAcknowledged()
-      // 先校验路径，避免无效路径遗留一个空白的 Agent 预览标签。
-      const preview = createAuthorizedPreviewUrl(inputPath, browserSession.allowedRoots, baseDir)
-      const tab = tabId ? this.getAgentTab(browserSession, tabId) : this.createTab(browserSession, true, true)
-      browserSession.agentTabId = tab.tabId
-      this.activateDisplayTab(browserSession, tab)
-      const reclaimed = this.reclaimExcessAgentTabs(browserSession)
-      if (reclaimed > 0) this.trace(browserSession, tab, 'tab', `已回收 ${reclaimed} 个最久未使用的 Agent 标签以保持最多 ${MAX_BROWSER_TABS} 个标签`)
-      return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
-        tab.isLocalPreview = true
-        try {
-          await this.loadUrl(tab, preview.url, operationSignal)
-          this.trace(browserSession, tab, 'navigate', `预览本地文件 ${preview.filePath.split(/[\\/]/).pop() ?? preview.filePath}`, 'verified')
-          this.updateNavigationState(browserSession, tab)
-          return structuredClone(this.buildState(browserSession))
-        } catch (error) {
-          this.trace(browserSession, tab, 'navigate', error instanceof BrowserOperationAbortedError ? '本地预览已停止，结果未知' : '本地预览加载失败', error instanceof BrowserOperationAbortedError ? 'unknown' : 'failed')
-          throw error
-        }
-      }, releaseAgentOperation)
+      preview = createAuthorizedPreviewUrl(inputPath, allowedRoots, baseDir, browserSession.browserSession, presentation?.validate)
+      const currentTab = tab = tabId ? this.getAgentTab(browserSession, tabId) : this.createTab(browserSession, true, !presentation)
+      const lease = preview
+      if (presentation) {
+        this.markUserBrowserContext(browserSession)
+        presentation.onTabCreated(currentTab.tabId)
+      } else {
+        browserSession.agentTabId = currentTab.tabId
+        this.activateDisplayTab(browserSession, currentTab)
+      }
+      return await this.runTabOperation(browserSession, currentTab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
+        lease.verify()
+        this.releasePreview(currentTab)
+        currentTab.isLocalPreview = true
+        currentTab.previewLease = lease
+        await this.loadUrl(currentTab, lease.url, operationSignal)
+        lease.verify()
+        throwIfBrowserOperationAborted(operationSignal)
+        if (!this.isManagedTabCurrent(browserSession, currentTab)) throw new Error('本地预览标签已关闭')
+        if (presentation) this.activateDisplayTab(browserSession, currentTab)
+        this.trace(browserSession, currentTab, 'navigate', `预览本地文件 ${lease.filePath.split(/[\\/]/).pop()}`, 'verified')
+        this.updateNavigationState(browserSession, currentTab)
+        this.reclaimExcessAgentTabs(browserSession)
+        return structuredClone(this.buildState(browserSession))
+      }, releaseOperation)
     } catch (error) {
-      releaseAgentOperation()
+      preview?.release()
+      if (tab?.previewLease === preview && tab) this.releasePreview(tab)
+      if (tab && !tabId && this.isManagedTabCurrent(browserSession, tab)) await this.closeTab(sessionId, tab.tabId)
+      if (browserSession.tabs.size === 0 && this.sessions.get(sessionId) === browserSession) this.sessions.delete(sessionId)
       throw error
+    } finally {
+      releaseOperation()
     }
   }
 
@@ -1234,7 +1260,7 @@ export class BrowserController {
       const destination = await assertSafeBrowserDestinationWithFallback(url)
       const host = new URL(destination.url).host
       return this.runTabOperation(browserSession, tab, signal ?? browserSession.agentAbortController.signal, async (operationSignal) => {
-        tab.isLocalPreview = false
+        this.releasePreview(tab)
         this.trace(browserSession, tab, 'navigate', `正在打开 ${host}`, 'dispatched')
         try {
           const result = await this.loadUrlWithFallback(tab, destination.url, destination.fallbackUrl, operationSignal)
@@ -1262,7 +1288,7 @@ export class BrowserController {
     const destination = await assertSafeBrowserDestinationWithFallback(url)
     const host = new URL(destination.url).host
     return this.runTabOperation(browserSession, tab, undefined, async () => {
-      tab.isLocalPreview = false
+      this.releasePreview(tab)
       this.trace(browserSession, tab, 'navigate', `正在打开 ${host}`, 'dispatched')
       try {
         const result = await this.loadUrlWithFallback(tab, destination.url, destination.fallbackUrl)
@@ -1792,7 +1818,9 @@ export class BrowserController {
     this.sessions.delete(sessionId)
     this.clearPresentationsForSession(sessionId)
     if (this.foregroundPresentationSessionId === sessionId) this.foregroundPresentationSessionId = null
+    browserSession.agentAbortController.abort()
     for (const tab of browserSession.tabs.values()) {
+      this.releasePreview(tab)
       this.clearAgentTargetHighlight(tab)
       try { if (tab.view.webContents.debugger.isAttached()) tab.view.webContents.debugger.detach() } catch { /* 已销毁 */ }
       this.detachTabView(tab)
@@ -1800,6 +1828,11 @@ export class BrowserController {
     }
     browserSession.tabs.clear()
     this.emitClosed(sessionId)
+  }
+
+  async destroySession(sessionId: string): Promise<void> {
+    this.configurations.delete(sessionId)
+    await this.close(sessionId)
   }
 
   dispose(): void {

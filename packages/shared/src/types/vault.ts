@@ -4,6 +4,7 @@ export interface VaultConfig {
   inboxPath: string
   allowAgentWrites: boolean
   configuredAt: number
+  rootIdentity?: string
 }
 
 /** Renderer-safe summary. The selected root path stays in the main process. */
@@ -40,6 +41,23 @@ export interface VaultFolderEntry {
 
 /** Entries used to build the Vault sidebar tree. */
 export type VaultTreeEntry = VaultFileEntry | VaultFolderEntry
+
+export interface VaultDirectoryPage {
+  folderPath: string
+  entries: VaultTreeEntry[]
+  nextCursor: string | null
+}
+
+export interface VaultLocateResult {
+  entries: VaultTreeEntry[]
+  relativePath: string
+  kind: 'file' | 'folder'
+}
+
+export type VaultWikiResolution =
+  | { status: 'resolved'; path: string }
+  | { status: 'ambiguous'; paths: string[]; partial: boolean }
+  | { status: 'missing' | 'incomplete' }
 
 /** A user-selected location in a Vault. Paths are always relative to its authorized root. */
 export interface VaultFocus {
@@ -98,6 +116,10 @@ export const VAULT_IPC_CHANNELS = {
   SELECT: 'vault:select',
   AUTHORIZE_CANDIDATE: 'vault:authorize-candidate',
   LIST_FILES: 'vault:list-files',
+  LIST_DIRECTORY: 'vault:list-directory',
+  LOCATE: 'vault:locate',
+  OPEN_FOLDER: 'vault:open-folder',
+  RESOLVE_WIKI: 'vault:resolve-wiki',
   READ_FILE: 'vault:read-file',
   RESOLVE_MEDIA: 'vault:resolve-media',
   SAVE_PASTED_IMAGE: 'vault:save-pasted-image',

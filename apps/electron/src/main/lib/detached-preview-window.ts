@@ -10,6 +10,16 @@ import type { Rectangle } from 'electron'
 import { basename, join } from 'path'
 import type { DetachedPreviewWindowData, DetachedPreviewWindowInput } from '@proma/shared'
 
+interface PresentationPreview {
+  requestId: string
+  signal: AbortSignal
+  validate: () => string
+  ready: () => void
+  closed: () => void
+}
+
+const presentationsBySender = new Map<number, PresentationPreview & { sessionId: string; filePath: string }>()
+
 const previewDataById = new Map<string, DetachedPreviewWindowData>()
 const previewWindowsById = new Map<string, BrowserWindow>()
 const previewIdBySignature = new Map<string, string>()
@@ -77,10 +87,12 @@ function installDetachedPreviewShortcuts(win: BrowserWindow): void {
 export function openDetachedPreviewWindow(
   input: DetachedPreviewWindowInput,
   sourceWindow?: BrowserWindow | null,
+  presentation?: PresentationPreview,
 ): string | null {
   if (!input.sessionId || !input.filePath || !input.dirPath) return null
 
-  const signature = makeSignature(input)
+  const signature = presentation?.requestId ?? makeSignature(input)
+  presentation?.validate()
   const existingId = previewIdBySignature.get(signature)
   const existingWindow = existingId ? previewWindowsById.get(existingId) : null
   if (existingId && existingWindow && !existingWindow.isDestroyed()) {
@@ -95,6 +107,7 @@ export function openDetachedPreviewWindow(
     ...input,
     id,
     title: getWindowTitle(input),
+    ...(presentation && { presentation: true }),
   }
   previewDataById.set(id, data)
   previewIdBySignature.set(signature, id)
@@ -114,6 +127,16 @@ export function openDetachedPreviewWindow(
   })
 
   previewWindowsById.set(id, win)
+  const senderId = win.webContents.id
+  const abort = (): void => { if (!win.isDestroyed()) win.close() }
+  if (presentation) {
+    presentationsBySender.set(senderId, { ...presentation, sessionId: input.sessionId, filePath: input.filePath })
+    presentation.signal.addEventListener('abort', abort, { once: true })
+    win.webContents.on('did-fail-load', (_event, _code, _message, _url, isMainFrame) => {
+      if (isMainFrame) abort()
+    })
+    win.webContents.once('render-process-gone', abort)
+  }
   installDetachedPreviewShortcuts(win)
 
   const isDev = !app.isPackaged
@@ -126,7 +149,12 @@ export function openDetachedPreviewWindow(
   }
 
   win.once('ready-to-show', () => {
-    if (!win.isDestroyed()) win.show()
+    if (win.isDestroyed()) return
+    try {
+      presentation?.validate()
+      win.show()
+      presentation?.ready()
+    } catch { abort() }
   })
 
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -145,6 +173,9 @@ export function openDetachedPreviewWindow(
   })
 
   win.on('closed', () => {
+    presentationsBySender.delete(senderId)
+    presentation?.signal.removeEventListener('abort', abort)
+    presentation?.closed()
     previewWindowsById.delete(id)
     previewDataById.delete(id)
     if (previewIdBySignature.get(signature) === id) {
@@ -155,6 +186,25 @@ export function openDetachedPreviewWindow(
   return id
 }
 
-export function getDetachedPreviewWindowData(id: string): DetachedPreviewWindowData | null {
-  return previewDataById.get(id) ?? null
+export function getDetachedPreviewWindowData(id: string, senderId?: number): DetachedPreviewWindowData | null {
+  const data = previewDataById.get(id)
+  if (!data) return null
+  if (data.presentation) {
+    const win = previewWindowsById.get(id)
+    if (!win || win.isDestroyed() || win.webContents.id !== senderId) return null
+    presentationsBySender.get(senderId)?.validate()
+  }
+  return data
+}
+
+export function getPresentationPreview(senderId: number | undefined) {
+  return senderId === undefined ? undefined : presentationsBySender.get(senderId)
+}
+
+export function closePresentationPreviews(sessionId: string): void {
+  for (const [id, data] of previewDataById) {
+    if (!data.presentation || data.sessionId !== sessionId) continue
+    const win = previewWindowsById.get(id)
+    if (win && !win.isDestroyed()) win.close()
+  }
 }

@@ -15,12 +15,13 @@ interface SkillCardProps {
   skill: SkillMeta
   isBuiltin: boolean
   updating: boolean
+  usageCount?: number
   onOpen: () => void
   onToggle: (enabled: boolean) => void
   onUpdate: () => void
 }
 
-export function SkillCard({ skill, isBuiltin, updating, onOpen, onToggle, onUpdate }: SkillCardProps): React.ReactElement {
+export function SkillCard({ skill, isBuiltin, updating, usageCount, onOpen, onToggle, onUpdate }: SkillCardProps): React.ReactElement {
   return (
     <div
       role="button"
@@ -65,7 +66,8 @@ export function SkillCard({ skill, isBuiltin, updating, onOpen, onToggle, onUpda
         {skill.description ?? '暂无描述'}
       </p>
 
-      <div className="mt-auto flex items-center gap-2">
+      <div className="mt-auto flex flex-wrap items-center gap-2">
+        {usageCount !== undefined && <span className="text-xs text-muted-foreground">{usageCount} 个会话使用</span>}
         {isBuiltin ? (
           <span className="flex items-center gap-1 rounded-md bg-blue-500/10 px-1.5 py-0.5 text-[11px] font-medium text-blue-600 dark:text-blue-400">
             <ShieldCheck size={12} /> PROMA 内置

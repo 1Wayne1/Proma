@@ -60,6 +60,15 @@ test('Given 快照位置位于项目内 When 开始捕获 Then 拒绝自我递�
   expect(recorder.activeCount).toBe(0)
 })
 
+test('Given 快照父目录指向项目 When 开始捕获 Then 拒绝且不创建存储目录', async () => {
+  const { project, root } = await fixture()
+  const alias = join(root, 'storage-alias')
+  await symlink(project, alias, process.platform === 'win32' ? 'junction' : 'dir')
+  const recorder = new TurnChangeRecorder(join(alias, 'private-snapshots'))
+  await expect(recorder.begin({ ...owner, cwd: project })).rejects.toThrow('项目之外')
+  expect(await readdir(project)).toEqual([])
+})
+
 test('Given Windows 数据流与设备路径 When 规范化 Then 不把它们当普通文件', () => {
   for (const path of ['file.txt:secret', 'CON', 'folder/NUL.txt', 'a.', 'folder/space ']) expect(() => normalizeTurnPath(path)).toThrow()
 })

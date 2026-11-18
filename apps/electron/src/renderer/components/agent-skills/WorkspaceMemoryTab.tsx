@@ -9,7 +9,8 @@ import { SettingsCard } from '@/components/settings/primitives'
 import { AgentActionHint } from '@/components/agent/AgentActionHint'
 import { WorkspaceMemoryChangeShelf } from './WorkspaceMemoryChangeShelf'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { agentPendingPromptAtom } from '@/atoms/agent-atoms'
+import { AgentMemoryDialog } from './AgentMemoryDialog'
+import { agentPendingPromptAtom, agentWorkspacesAtom } from '@/atoms/agent-atoms'
 import { memoryFileNavigationAtom, workspaceMemoryChangesAtom } from '@/atoms/memory-change-atoms'
 import { useCreateSession } from '@/hooks/useCreateSession'
 import { cn } from '@/lib/utils'
@@ -73,6 +74,7 @@ function filterNodes(nodes: SkillFileNode[], query: string, contentMatchPaths = 
 export function WorkspaceMemoryTab({ workspaceSlug, sessionId, search, embedded = false, onCloseChangeView }: WorkspaceMemoryTabProps): React.ReactElement {
   const { createAgent } = useCreateSession()
   const setPendingPrompt = useSetAtom(agentPendingPromptAtom)
+  const workspace = useAtomValue(agentWorkspacesAtom).find((item) => item.slug === workspaceSlug)
   const [memoryNavigationRequest, setMemoryNavigationRequest] = useAtom(memoryFileNavigationAtom)
   const workspaceMemoryChanges = useAtomValue(workspaceMemoryChangesAtom)
   const memoryChanges = workspaceMemoryChanges.get(workspaceSlug) ?? []
@@ -440,8 +442,18 @@ export function WorkspaceMemoryTab({ workspaceSlug, sessionId, search, embedded 
     )
   }
 
-  if (loading || !summary) {
+  if (loading) {
     return <div className="py-20 text-center text-sm text-muted-foreground">加载协作知识中...</div>
+  }
+
+  if (!summary) {
+    return (
+      <div className="flex flex-wrap items-center gap-2" role="status">
+        <span className="text-sm text-muted-foreground">旧工作区文件暂时无法读取。</span>
+        {workspace && <AgentMemoryDialog scope={{ kind: 'project', workspaceId: workspace.id }} label="管理项目记忆" />}
+        {!embedded && <AgentMemoryDialog scope={{ kind: 'global' }} />}
+      </div>
+    )
   }
 
   return (
@@ -451,11 +463,16 @@ export function WorkspaceMemoryTab({ workspaceSlug, sessionId, search, embedded 
           <Brain className="size-4 shrink-0 text-foreground/65" />
           <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold text-foreground">项目记忆</div>
-            <div className="text-[11px] text-muted-foreground">{summary.autoMemory.fileCount} 个记忆文件</div>
+            <div className="text-[11px] text-muted-foreground">{summary.autoMemory.fileCount} 个工作区文件</div>
           </div>
+          {workspace && <AgentMemoryDialog scope={{ kind: 'project', workspaceId: workspace.id }} label="管理记忆" onChange={() => void refresh()} />}
         </div>
       )}
       {embedded && <AgentActionHint action="查找、补充或整理项目记忆" />}
+      {!embedded && workspace && <div className="flex flex-wrap gap-2">
+        <AgentMemoryDialog scope={{ kind: 'project', workspaceId: workspace.id }} label="管理项目记忆" onChange={() => void refresh()} />
+        <AgentMemoryDialog scope={{ kind: 'global' }} />
+      </div>}
       {!embedded && <SettingsCard divided={false}>
         <div className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
@@ -502,7 +519,7 @@ export function WorkspaceMemoryTab({ workspaceSlug, sessionId, search, embedded 
         <SettingsCard divided={false} className="min-h-0 overflow-hidden">
           <div className="flex h-full min-h-0 flex-col">
             <div className="flex items-center justify-between border-b border-border/50 px-3 py-2">
-              <div className="text-[13px] font-medium text-foreground/75">记忆文件</div>
+              <div className="text-[13px] font-medium text-foreground/75">工作区文件</div>
               <button
                 type="button"
                 title="刷新"

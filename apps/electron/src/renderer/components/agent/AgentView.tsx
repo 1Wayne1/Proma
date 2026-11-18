@@ -125,8 +125,8 @@ import { useOpenSession } from '@/hooks/useOpenSession'
 import { draftSessionIdsAtom } from '@/atoms/draft-session-atoms'
 import { sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { useOpenPreview } from '@/components/diff/preview-opener'
-import type { AgentDeferredQueueMessageInput, AgentSendInput, AgentPendingFile, AgentThinkingLevel, FileDialogLargeFile, FileDialogResult, ModelOption, ReasoningCapability, SDKMessage, SDKUserMessage } from '@proma/shared'
-import { inferContextWindow, inferReasoningTransport, isCodexFastModeSupportedModel, MAX_ATTACHMENT_SIZE, normalizeReasoningCapabilityLevel, normalizeReasoningLevel, resolveReasoningCapability, resolveReasoningProfile } from '@proma/shared'
+import type { AgentDeferredQueueMessageInput, AgentSendInput, AgentPendingFile, AgentThinkingLevel, CodexSpeed, PromaNarrationMode, FileDialogLargeFile, FileDialogResult, ModelOption, ReasoningCapability, SDKMessage, SDKUserMessage } from '@proma/shared'
+import { inferContextWindow, inferReasoningTransport, getCodexSpeeds, isCodexSpeed, isPromaNarrationMode, resolveCodexSpeed, MAX_ATTACHMENT_SIZE, normalizeReasoningCapabilityLevel, normalizeReasoningLevel, resolveReasoningCapability, resolveReasoningProfile } from '@proma/shared'
 import { fileToBase64, formatFileNames, getFileParentPath } from '@/lib/file-utils'
 import { getFilePanelDragData, INSERT_FILE_MENTION_EVENT, type FilePanelDragItem } from '@/lib/file-panel-drag'
 import {
@@ -786,10 +786,10 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
     () => globalChannels.find((c) => c.id === agentChannelId)?.provider,
     [globalChannels, agentChannelId],
   )
-  const isCodexFastModeAvailable = hasSessionMeta
-    && agentChannelProvider === 'openai-codex'
-    && isCodexFastModeSupportedModel(agentModelId ?? undefined)
-  const codexFastModeEnabled = isCodexFastModeAvailable && sessionMeta?.codexFastMode === true
+  const codexSpeeds = React.useMemo(() => getCodexSpeeds(agentModelId ?? undefined), [agentModelId])
+  const codexSpeed = resolveCodexSpeed(sessionMeta, agentModelId ?? undefined)
+  const narrationMode = sessionMeta?.narrationMode === 'explain' ? 'explain' : 'efficiency'
+  const [savingRunPreference, setSavingRunPreference] = React.useState(false)
   const reasoningProfile = hasSessionMeta
     ? resolveReasoningProfile({
       modelId: agentModelId ?? undefined,
@@ -1959,24 +1959,23 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
     }
   }, [sessionId, streaming, backgroundWaiting, setSessionChannelMap, setSessionModelMap, setDefaultChannelId, setDefaultModelId, setAgentSessions])
 
-  const handleCodexFastModeChange = React.useCallback(async (): Promise<void> => {
-    if (!isCodexFastModeAvailable || streaming || backgroundWaiting || !sessionMeta) return
-
-    const previousSessionMeta = sessionMeta
-    const nextEnabled = !codexFastModeEnabled
-    setAgentSessions((prev) => prev.map((item) => (
-      item.id === sessionId ? { ...item, codexFastMode: nextEnabled, updatedAt: Date.now() } : item
-    )))
-
+  const updateRunPreference = React.useCallback(async (preference: { codexSpeed: CodexSpeed } | { narrationMode: PromaNarrationMode }): Promise<void> => {
+    if (!hasSessionMeta || savingRunPreference) return
+    setSavingRunPreference(true)
     try {
-      const updated = await window.electronAPI.updateSessionCodexFastMode(sessionId, nextEnabled)
-      setAgentSessions((prev) => prev.map((item) => item.id === sessionId ? updated : item))
+      if ('codexSpeed' in preference) {
+        await window.electronAPI.updateSessionCodexSpeed(sessionId, preference.codexSpeed)
+      } else {
+        await window.electronAPI.updateSessionNarrationMode(sessionId, preference.narrationMode)
+      }
+      setAgentSessions(items => items.map(item => item.id === sessionId ? { ...item, ...preference } : item))
+      if (streaming || backgroundWaiting) toast.info('过程表述将于下一轮生效')
     } catch (error) {
-      console.error('[AgentView] 切换 Codex Fast Mode 失败:', error)
-      setAgentSessions((prev) => prev.map((item) => item.id === sessionId ? previousSessionMeta : item))
-      toast.error('快速模式切换失败', { description: getErrorMessage(error) })
+      toast.error('会话设置更新失败', { description: getErrorMessage(error) })
+    } finally {
+      setSavingRunPreference(false)
     }
-  }, [backgroundWaiting, codexFastModeEnabled, isCodexFastModeAvailable, sessionId, sessionMeta, setAgentSessions, streaming])
+  }, [backgroundWaiting, hasSessionMeta, savingRunPreference, sessionId, setAgentSessions, streaming])
 
   const updateReasoningLevel = React.useCallback(async (thinkingLevel: AgentThinkingLevel): Promise<void> => {
     if (!isSessionThinkingAvailable || !sessionMeta) return
@@ -2800,26 +2799,33 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
   const canSend = !isStopping && messagesLoaded && (streaming || !messagesRefreshing) && (hasTextInput || pendingFiles.length > 0 || !!suggestion) && agentChannelId !== null && hasAvailableModel && (!streaming || hasTextInput)
 
   const inputToolbarItems = React.useMemo<ToolbarItem[]>(() => [
-    ...(isCodexFastModeAvailable ? [{
-      key: 'codex-fast-mode',
+    ...(hasSessionMeta && agentChannelProvider === 'openai-codex' ? [{
+      key: 'codex-speed',
       node: (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              className="h-8 min-w-10 rounded-md px-2 text-xs font-medium text-foreground/60 transition-transform hover:bg-muted/50 hover:text-foreground active:scale-[0.96]"
-              onClick={handleCodexFastModeChange}
-              disabled={streaming || backgroundWaiting}
-              aria-pressed={codexFastModeEnabled}
-            >
-              {codexFastModeEnabled ? '快速' : '标准'}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top">
-            <p>{codexFastModeEnabled ? '已启用快速模式：优先响应，消耗更多额度' : '开启快速模式：优先响应，消耗更多额度'}</p>
-          </TooltipContent>
-        </Tooltip>
+        <Select value={codexSpeed} disabled={codexSpeeds.length < 2 || streaming || backgroundWaiting || savingRunPreference} onValueChange={(speed) => {
+          if (isCodexSpeed(speed)) void updateRunPreference({ codexSpeed: speed })
+        }}>
+          <SelectTrigger className="h-8 w-auto gap-1 border-0 px-2 text-xs shadow-none" aria-label="Codex 速度" title={codexSpeeds.length < 2 ? '当前模型仅支持标准速度' : 'Codex 速度'}><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="standard">标准</SelectItem>
+            <SelectItem value="fast" disabled={!codexSpeeds.includes('fast')}>快速</SelectItem>
+            <SelectItem value="ultrafast" disabled={!codexSpeeds.includes('ultrafast')}>极速</SelectItem>
+          </SelectContent>
+        </Select>
+      ),
+    }] : []),
+    ...(hasSessionMeta ? [{
+      key: 'narration',
+      node: (
+        <Select value={narrationMode} disabled={savingRunPreference} onValueChange={(mode) => {
+          if (isPromaNarrationMode(mode)) void updateRunPreference({ narrationMode: mode })
+        }}>
+          <SelectTrigger className="h-8 w-auto gap-1 border-0 px-2 text-xs shadow-none" aria-label="过程表述" title="过程表述"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="efficiency">高效</SelectItem>
+            <SelectItem value="explain">解释</SelectItem>
+          </SelectContent>
+        </Select>
       ),
     }] : []),
     { key: 'permission-mode', node: <PermissionModeSelector sessionId={sessionId} /> },
@@ -2879,9 +2885,13 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
   ], [
     planQuotaChannelId,
     planQuotaChannelUpdatedAt,
-    isCodexFastModeAvailable,
-    codexFastModeEnabled,
-    handleCodexFastModeChange,
+    hasSessionMeta,
+    agentChannelProvider,
+    codexSpeed,
+    codexSpeeds,
+    narrationMode,
+    savingRunPreference,
+    updateRunPreference,
     isSessionThinkingAvailable,
     openAIThinkingLevel,
     openAIThinkingLevels,

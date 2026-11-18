@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, realpath, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { BrowserWindow } from 'electron'
 import { startWorkspaceWatcher, stopWorkspaceWatcher } from '../../workspace-watcher'
@@ -8,7 +8,7 @@ import { watchHost } from './watcher-host'
 
 const pause = (ms: number): Promise<void> => new Promise(done => setTimeout(done, ms))
 async function verify(): Promise<void> {
-  const root = process.argv[2]!
+  const root = await realpath(process.argv[2]!)
   const shared = join(root, 'shared'); const next = join(root, 'next')
   watchHost.managed = join(root, 'managed')
   await mkdir(shared); await mkdir(next); await mkdir(watchHost.managed)
@@ -19,9 +19,14 @@ async function verify(): Promise<void> {
   assert.equal(watchHost.watchers.filter(entry => entry.path === shared).length, 1)
   const changed = async (path: string, content: string): Promise<void> => {
     const count = events.length
-    await writeFile(path, content)
-    for (let i = 0; i < 30 && events.length === count; i++) await pause(50)
-    assert.ok(events.length > count, `未收到目录事件: ${path}`)
+    // macOS 的原生 watcher 没有就绪回调，刚注册时第一笔写入可能早于 FSEvents 开始收集。
+    // 用实际写入等到目标路径送达，且不能用无关目录的事件满足断言。
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await writeFile(path, `${content} ${attempt}`)
+      await pause(650) // 留出原生事件与应用 300ms 防抖的投递时间。
+      if (events.slice(count).some(paths => paths.includes(path))) return
+    }
+    assert.fail(`未收到目录事件: ${path}`)
   }
   await changed(join(shared, 'file.txt'), 'first')
   watchHost.sessions = [{ id: 'b', attachedDirectories: [shared] }]

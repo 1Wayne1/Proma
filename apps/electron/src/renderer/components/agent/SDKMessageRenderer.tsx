@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils'
 import { ImageLightbox, type LightboxImage } from '@/components/ui/image-lightbox'
 import { ContentBlock } from './ContentBlock'
 import { TurnFileChangesSummary, buildTurnFileNameMap } from './TurnFileChangesSummary'
+import { PresentedResources } from './PresentedResources'
 import { TurnChangesPanel } from './TurnChangesPanel'
 import { TurnSkillUsageSummary } from './TurnSkillUsageSummary'
 import { ProcessBlockGroup, buildAssistantTurnRenderItems } from './ProcessBlockGroup'
@@ -570,6 +571,7 @@ export function AssistantTurnRenderer({ turn, allMessages, basePath, onFork, onR
         )}
         </TurnFileMapProvider>
       </MessageContent>
+      <PresentedResources turnId={turn.inputMessage?.uuid} />
       {/* 完成态汇总：Skill 使用记录与文件改动 chip */}
       {!isStreaming && (
         <>

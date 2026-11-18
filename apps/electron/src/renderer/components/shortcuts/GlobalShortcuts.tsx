@@ -103,13 +103,18 @@ export function GlobalShortcuts(): null {
   useEffect(() => {
     initShortcutRegistry()
 
-    window.electronAPI.getSettings().then((settings) => {
-      if (settings.shortcutOverrides) {
-        setShortcutOverrides(settings.shortcutOverrides)
-        updateShortcutOverrides(settings.shortcutOverrides)
-      }
+    let receivedChange = false
+    let disposed = false
+    const unsubscribe = window.electronAPI.onLiveLocalPreferencesChanged(settings => {
+      receivedChange = true
+      setShortcutOverrides(settings.shortcutOverrides ?? {})
+    })
+    void window.electronAPI.getSettings().then(settings => {
+      if (disposed) return
+      if (!receivedChange) setShortcutOverrides(settings.shortcutOverrides ?? {})
       setSendWithCmdEnter(settings.sendWithCmdEnter ?? false)
     }).catch(console.error)
+    return () => { disposed = true; unsubscribe() }
   }, [setShortcutOverrides, setSendWithCmdEnter])
 
   // 配置变更时同步到注册表

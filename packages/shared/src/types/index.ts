@@ -70,3 +70,6 @@ export * from './agent-island'
 export * from './vault'
 export * from './network'
 export * from './turn-changes'
+
+export * from './agent-memory'
+export * from './present'

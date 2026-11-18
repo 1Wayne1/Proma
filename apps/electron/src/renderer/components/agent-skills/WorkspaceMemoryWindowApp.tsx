@@ -41,6 +41,7 @@ export function WorkspaceMemoryWindowApp(): React.ReactElement {
   const selectedPathRef = React.useRef<string | null>(null)
   const dirtyRef = React.useRef(false)
   const textRef = React.useRef('')
+  const baseTextRef = React.useRef('')
 
   React.useEffect(() => {
     selectedPathRef.current = selectedPath
@@ -68,6 +69,7 @@ export function WorkspaceMemoryWindowApp(): React.ReactElement {
       dirtyRef.current = false
       setSelectedPath(file.relativePath)
       textRef.current = file.content ?? ''
+      baseTextRef.current = file.content ?? ''
       setText(file.content ?? '')
       setDirty(false)
       setRemoteChanged(false)
@@ -137,7 +139,8 @@ export function WorkspaceMemoryWindowApp(): React.ReactElement {
     const savedText = textRef.current
     setSaving(true)
     try {
-      await window.electronAPI.writeWorkspaceAutoMemoryFile(workspaceSlug, savedPath, savedText)
+      await window.electronAPI.writeWorkspaceAutoMemoryFile(workspaceSlug, savedPath, savedText, baseTextRef.current)
+      baseTextRef.current = savedText
       const unchangedSinceSave = selectedPathRef.current === savedPath && textRef.current === savedText
       dirtyRef.current = !unchangedSinceSave
       setDirty(!unchangedSinceSave)

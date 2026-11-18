@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path'
 
 const managerModulePath = join(import.meta.dir, 'planning-manager.ts')
 const repoRoot = dirname(dirname(dirname(dirname(dirname(import.meta.dir)))))
-const electronBinary = createRequire(import.meta.url)('electron') as string
+const nodeBinary = process.env.PROMA_TEST_NODE_EXECUTABLE ?? createRequire(import.meta.url)('electron') as string
 
 /**
  * planning-manager 的数据库连接是模块级单例，而 node:sqlite 仅由 Electron 的 Node 22 提供。
@@ -27,6 +27,14 @@ test('Given a fresh planning database When planning data changes Then isolation,
     const configDir = join(process.env.HOME, '.proma-dev')
     mkdirSync(configDir, { recursive: true })
     const now = Date.now()
+    if (process.argv[2] === 'restart') {
+      const target = manager.listTodos().find(todo => todo.title === '休眠补发')
+      const reminder = target.reminders[0]
+      assert.equal(reminder.lastNotifiedAt !== undefined, true)
+      assert.equal(manager.claimDuePlanningReminders().some(item => item.id === reminder.id), false)
+      assert.equal(manager.listActivePlanningReminders().find(item => item.id === reminder.id).occurrenceId, reminder.occurrenceId)
+      process.exit(0)
+    }
 
     // Given a fresh database, groups remain independent even when names match.
     const todoGroup = manager.createPlanningGroup({ scope: 'todo', name: '工作' })
@@ -96,6 +104,25 @@ test('Given a fresh planning database When planning data changes Then isolation,
     assert.equal(eventColumns.includes('group_id'), false)
     assert.equal(eventColumns.includes('scratch_excerpt'), false)
     assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), [])
+
+    // 已过期提醒在唤醒检查时认领一次。重复扫描和保存相同时间不会再触发。
+    const past = now - 60_000
+    const catchUp = manager.createTodo({ title: '休眠补发', reminders: [{ triggerAt: past }] })
+    const first = catchUp.reminders[0]
+    assert.equal(manager.claimDuePlanningReminders(past - 1).some(item => item.id === first.id), false)
+    assert.equal(manager.claimDuePlanningReminders(now).find(item => item.id === first.id).occurrenceId, first.occurrenceId)
+    assert.equal(manager.updatePlanningReminder(first.id, past).occurrenceId, first.occurrenceId)
+    assert.equal(manager.claimDuePlanningReminders(now + 1).some(item => item.id === first.id), false)
+    const moved = manager.updatePlanningReminder(first.id, now + 60_000, first.occurrenceId)
+    assert.notEqual(moved.occurrenceId, first.occurrenceId)
+    assert.throws(() => manager.deletePlanningReminder(first.id, first.occurrenceId), /其他窗口改期/)
+    const movedBack = manager.updatePlanningReminder(first.id, past, moved.occurrenceId)
+    assert.notEqual(movedBack.occurrenceId, first.occurrenceId)
+    assert.equal(manager.claimDuePlanningReminders(now).find(item => item.id === first.id).occurrenceId, movedBack.occurrenceId)
+    const removed = manager.createPlanningReminder({ targetType: 'todo', targetId: catchUp.id, triggerAt: past })
+    assert.equal(manager.deletePlanningReminder(removed.id, removed.occurrenceId), true)
+    assert.equal(manager.claimDuePlanningReminders(now).some(item => item.id === removed.id), false)
+    db.close()
   `
   writeFileSync(sourcePath, source)
 
@@ -111,12 +138,15 @@ test('Given a fresh planning database When planning data changes Then isolation,
     if (!compiledScript) throw new Error('未生成 planning manager 验证脚本')
     await Bun.write(outputPath, compiledScript)
 
-    const result = spawnSync(electronBinary, [outputPath], {
+    const options = {
       cwd: repoRoot,
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', HOME: home, PROMA_DEV: '1' },
-      encoding: 'utf8',
-    })
+      encoding: 'utf8' as const,
+    }
+    const result = spawnSync(nodeBinary, [outputPath], options)
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0)
+    const restarted = spawnSync(nodeBinary, [outputPath, 'restart'], options)
+    expect(restarted.status, `${restarted.stdout}\n${restarted.stderr}`).toBe(0)
   } finally {
     rmSync(home, { recursive: true, force: true })
   }

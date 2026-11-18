@@ -62,30 +62,37 @@ export class TurnChangesRun {
   }
 
   async before(toolName: string, input: Record<string, unknown>, signal: AbortSignal): Promise<void> {
+    const raw = toolName === 'NotebookEdit' ? input.notebook_path : input.file_path ?? input.path
+    const target = ['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(toolName) && typeof raw === 'string'
+      ? resolve(this.options.toolCwd, raw)
+      : undefined
+    await this.captureBeforeWrite(target, signal)
+  }
+
+  /** 已授权的主进程写入工具可提交验证后的绝对文件路径。 */
+  async captureBeforeWrite(path: string | undefined, signal?: AbortSignal): Promise<void> {
     await this.pending
-    signal.throwIfAborted()
+    signal?.throwIfAborted()
     this.controller.signal.throwIfAborted()
     if (!this.options.isCurrent()) throw new DOMException('本轮执行已结束', 'AbortError')
-    if (!['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(toolName) || !this.current || this.sealed) return
-    const raw = toolName === 'NotebookEdit' ? input.notebook_path : input.file_path ?? input.path
-    if (typeof raw !== 'string') return
-    const target = isAbsolute(raw) ? resolve(raw) : resolve(this.options.toolCwd, raw)
+    if (!path || !isAbsolute(path) || !this.current || this.sealed) return
+    const target = resolve(path)
     const root = [resolve(this.options.root), this.current.canonicalCwd].find(root => isWithinTurnRoot(root, target))
     try {
       if (!root) {
         await this.options.recorder.noteLimitation(this.current, this.current.recordId, 'additional-root-not-captured')
       } else {
-        const combined = AbortSignal.any([signal, this.controller.signal])
+        const combined = signal ? AbortSignal.any([signal, this.controller.signal]) : this.controller.signal
         await this.options.recorder.captureBefore(this.current, this.current.recordId, relative(root, target).replace(/\\/g, '/'), combined)
       }
     } catch {
-      signal.throwIfAborted()
+      signal?.throwIfAborted()
       this.controller.signal.throwIfAborted()
       this.unavailable = true
       this.options.onUnavailable?.()
       if (this.current) await this.options.recorder.noteLimitation(this.current, this.current.recordId, 'not-captured').catch(() => {})
     }
-    signal.throwIfAborted()
+    signal?.throwIfAborted()
     this.controller.signal.throwIfAborted()
   }
 

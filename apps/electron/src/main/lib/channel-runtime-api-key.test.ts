@@ -8,6 +8,7 @@ type ChannelManagerModule = typeof import('./channel-manager')
 
 let channelManager: ChannelManagerModule
 let tempHome: string
+let encryptionAvailable = false
 const originalHome = process.env.HOME
 const originalPromaDev = process.env.PROMA_DEV
 
@@ -17,9 +18,13 @@ mock.module('electron', () => ({
     getPath: () => join(process.env.HOME ?? tempHome, 'Library', 'Application Support'),
   },
   safeStorage: {
-    isEncryptionAvailable: () => false,
-    encryptString: (value: string) => Buffer.from(value),
-    decryptString: (value: Buffer) => value.toString('utf-8'),
+    isEncryptionAvailable: () => encryptionAvailable,
+    encryptString: (value: string) => Buffer.from(`cipher:${value}`),
+    decryptString: (value: Buffer) => {
+      const encoded = value.toString('utf8')
+      if (!encoded.startsWith('cipher:')) throw new Error('密钥不可解密')
+      return encoded.slice('cipher:'.length)
+    },
   },
   shell: {
     openExternal: async () => undefined,
@@ -49,6 +54,7 @@ beforeAll(async () => {
 })
 
 beforeEach(() => {
+  encryptionAvailable = false
   rmSync(join(tempHome, '.proma'), { recursive: true, force: true })
 })
 
@@ -67,6 +73,31 @@ afterAll(() => {
 })
 
 describe('渠道运行时认证解析', () => {
+  test('Given 旧版在系统加密不可用时保存了明文 When 重启后加密可用 Then 恢复原始渠道凭据', async () => {
+    writeChannels([{ id: 'legacy', name: '验收渠道', provider: 'openai-responses', baseUrl: 'https://api.example.com/v1',
+      apiKey: 'legacy-key-with-dashes', models: [], enabled: true, createdAt: 1, updatedAt: 1 }])
+    encryptionAvailable = true
+    await expect(channelManager.resolveChannelRuntimeApiKey('legacy')).resolves.toBe('legacy-key-with-dashes')
+  })
+
+  test('Given 无系统加密时保存可作 Base64 的密钥 When 加密可用 Then 通过存储标记恢复原值', async () => {
+    const input = { name: '验收渠道', provider: 'openai-responses' as const, baseUrl: 'https://api.example.com/v1',
+      apiKey: 'YWJjZA==', models: [], enabled: true }
+    const channel = channelManager.createChannel(input)
+    encryptionAvailable = true
+    await expect(channelManager.resolveChannelRuntimeApiKey(channel.id)).resolves.toBe(input.apiKey)
+
+    const encryptedChannel = channelManager.createChannel(input)
+    await expect(channelManager.resolveChannelRuntimeApiKey(encryptedChannel.id)).resolves.toBe(input.apiKey)
+  })
+
+  test('Given 系统加密可用但密文解密失败 When 解析凭据 Then 保留错误而不将密文作为密钥发送', async () => {
+    writeChannels([{ id: 'bad', name: '验收渠道', provider: 'openai-responses', baseUrl: 'https://api.example.com/v1',
+      apiKey: Buffer.from('other-keychain').toString('base64'), models: [], enabled: true, createdAt: 1, updatedAt: 1 }])
+    encryptionAvailable = true
+    await expect(channelManager.resolveChannelRuntimeApiKey('bad')).rejects.toThrow('解密 API Key 失败')
+  })
+
   test('Given ChatGPT OAuth 渠道 When 解析运行时 key Then 返回 access token 而不是凭据 JSON', async () => {
     writeChannels([
       {

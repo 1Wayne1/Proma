@@ -27,6 +27,7 @@ export interface AgentWorkspace {
   projectRootPath?: string
   /** 本地项目根目录的运行时状态；Proma 托管项目不设置此字段。 */
   projectRootStatus?: LocalProjectRootStatus
+  archived?: boolean
   /** 创建时间戳 */
   createdAt: number
   /** 更新时间戳 */
@@ -96,6 +97,30 @@ export function isCodexFastModeSupportedModel(modelId: string | undefined): bool
     || isGpt6SolFamily(modelId)
     || isGpt6LunaFamily(modelId)
     || (modelId !== undefined && (CODEX_FAST_MODE_MODEL_IDS as readonly string[]).includes(modelId.toLowerCase()))
+}
+
+export const CODEX_SPEEDS = ['standard', 'fast', 'ultrafast'] as const
+export type CodexSpeed = typeof CODEX_SPEEDS[number]
+
+export function isCodexSpeed(value: unknown): value is CodexSpeed {
+  return CODEX_SPEEDS.some(speed => speed === value)
+}
+
+export function getCodexSpeeds(modelId: string | undefined): readonly CodexSpeed[] {
+  if (isGpt6AstraFamily(modelId) || /^gpt-6\.1-sol(?:-\d+)?$/.test(modelId?.trim().toLowerCase().replace(/\[1m\]$/, '') ?? '')) return CODEX_SPEEDS
+  return isCodexFastModeSupportedModel(modelId) ? ['standard', 'fast'] : ['standard']
+}
+
+export function resolveCodexSpeed(settings: Pick<AgentSessionMeta, 'codexSpeed' | 'codexFastMode'> | undefined, modelId: string | undefined): CodexSpeed {
+  const speed = isCodexSpeed(settings?.codexSpeed) ? settings.codexSpeed : settings?.codexFastMode === true ? 'fast' : 'standard'
+  return getCodexSpeeds(modelId).includes(speed) ? speed : 'standard'
+}
+
+export const PROMA_NARRATION_MODES = ['efficiency', 'explain'] as const
+export type PromaNarrationMode = typeof PROMA_NARRATION_MODES[number]
+
+export function isPromaNarrationMode(value: unknown): value is PromaNarrationMode {
+  return PROMA_NARRATION_MODES.some(mode => mode === value)
 }
 
 /**
@@ -272,6 +297,12 @@ export interface SkillActivation {
   workspaceSkillPath?: string
   /** Ways this turn loaded the Skill. */
   sources: SkillActivationSource[]
+}
+
+export interface WorkspaceSkillUsage {
+  /** 每个 Skill 的实际使用会话数，同一会话只计一次。 */
+  sessionsBySlug: Record<string, number>
+  partial: boolean
 }
 
 /** SDK result 消息（查询结束时返回） */
@@ -745,8 +776,10 @@ export interface AgentSessionMeta {
     sourceRuntime: 'claude'
     continuationRequired: true
   }
-  /** ChatGPT Codex Fast Mode 开关；仅 Pi + ChatGPT OAuth 的受支持模型实际生效。 */
+  /** 旧版速度设置，迁移后保留原值。 */
   codexFastMode?: boolean
+  codexSpeed?: CodexSpeed
+  narrationMode?: PromaNarrationMode
   /** 本会话的推理深度；未设置时兼容旧版全局思考设置。 */
   reasoningLevel?: AgentThinkingLevel
   /** @deprecated 使用 reasoningLevel；保留以读取历史会话数据。 */
@@ -1854,6 +1887,7 @@ export const AGENT_IPC_CHANNELS = {
   CREATE_PROJECT: 'agent:create-project',
   /** 更新工作区 */
   UPDATE_WORKSPACE: 'agent:update-workspace',
+  SET_WORKSPACE_ARCHIVED: 'agent:set-workspace-archived',
   /** 为本地项目重新选择已有项目根目录 */
   RELINK_WORKSPACE_PROJECT_ROOT: 'agent:relink-workspace-project-root',
   /** 在丢失的本地项目原路径重新创建空目录 */
@@ -1933,6 +1967,7 @@ export const AGENT_IPC_CHANNELS = {
   GET_OTHER_WORKSPACE_SKILLS: 'agent:get-other-workspace-skills',
   /** 获取默认 Skills 的 slug 列表（来自 ~/.proma/default-skills/） */
   GET_DEFAULT_SKILL_SLUGS: 'agent:get-default-skill-slugs',
+  GET_SKILL_USAGE: 'agent:get-skill-usage',
   /** 从其他工作区导入 Skill 到当前工作区 */
   IMPORT_SKILL_FROM_WORKSPACE: 'agent:import-skill-from-workspace',
   /** 从其他工作区批量导入多个 Skill 到当前工作区 */
@@ -2084,6 +2119,8 @@ export const AGENT_IPC_CHANNELS = {
   /** 切换指定会话的 Agent runtime（下一轮生效，跨 runtime 时清空 SDK resume ID） */
   /** 切换指定会话的 ChatGPT Codex Fast Mode（下一轮 Pi 请求生效） */
   UPDATE_SESSION_CODEX_FAST_MODE: 'agent:update-session-codex-fast-mode',
+  UPDATE_SESSION_CODEX_SPEED: 'agent:update-session-codex-speed',
+  UPDATE_SESSION_NARRATION_MODE: 'agent:update-session-narration-mode',
   /** 查询 Pi catalog 或专属 profile 支持的会话级推理档位 */
   GET_PI_REASONING_CAPABILITY: 'agent:get-pi-reasoning-capability',
   /** 更新指定会话的推理深度（下一轮 Pi 请求生效） */

@@ -13,6 +13,7 @@ import {
   agentSessionsAtom,
   agentChannelIdAtom,
   agentModelIdAtom,
+  agentWorkspacesAtom,
   currentAgentWorkspaceIdAtom,
 } from '@/atoms/agent-atoms'
 import { activeViewAtom } from '@/atoms/active-view'
@@ -54,6 +55,7 @@ export function useCreateSession(): CreateSessionActions {
   const agentChannelId = useAtomValue(agentChannelIdAtom)
   const agentModelId = useAtomValue(agentModelIdAtom)
   const currentWorkspaceId = useAtomValue(currentAgentWorkspaceIdAtom)
+  const workspaces = useAtomValue(agentWorkspacesAtom)
 
   const createChat = async (options?: CreateSessionOptions): Promise<string | undefined> => {
     try {
@@ -80,10 +82,12 @@ export function useCreateSession(): CreateSessionActions {
 
   const createAgent = async (options?: CreateSessionOptions): Promise<string | undefined> => {
     try {
+      const currentWorkspace = workspaces.find(workspace => workspace.id === currentWorkspaceId)
+      const workspaceId = currentWorkspace?.archived ? workspaces.find(workspace => !workspace.archived)?.id : currentWorkspaceId ?? undefined
       const meta = await window.electronAPI.createAgentSession(
         undefined,
         options?.channelId ?? agentChannelId ?? undefined,
-        currentWorkspaceId || undefined,
+        workspaceId,
         options?.modelId ?? agentModelId ?? undefined,
         options?.draft,
       )

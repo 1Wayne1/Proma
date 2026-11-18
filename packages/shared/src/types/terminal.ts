@@ -14,6 +14,9 @@ export const TERMINAL_IPC_CHANNELS = {
   ACK_OUTPUT: 'terminal:ack-output',
   AGENT_OPEN: 'terminal:agent-open',
   AGENT_CLOSE: 'terminal:agent-close',
+  AGENT_ACTIVITY: 'terminal:agent-activity',
+  LIST_AGENT: 'terminal:list-agent',
+  RETAIN_AGENT: 'terminal:retain-agent',
   OUTPUT: 'terminal:output',
   EXIT: 'terminal:exit',
 } as const
@@ -84,6 +87,7 @@ export interface TerminalSnapshot {
   state: TerminalState
   output: string
   sequence: number
+  exitCode?: number
 }
 
 /** 主进程通知 Renderer：Agent 已创建一个应呈现在其右侧工作区的终端。 */
@@ -98,6 +102,16 @@ export interface AgentTerminalOpenEvent {
 export interface AgentTerminalCloseEvent {
   sessionId: string
   terminalId: string
+}
+
+export interface AgentTerminalActivity {
+  sessionId: string
+  terminalIds: string[]
+}
+
+export interface AgentTerminalCatalog {
+  terminals: AgentTerminalOpenEvent[]
+  activity: AgentTerminalActivity[]
 }
 
 export interface TerminalExitEvent {

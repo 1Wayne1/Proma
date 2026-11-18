@@ -22,4 +22,5 @@ export interface UserProfile {
 export const USER_PROFILE_IPC_CHANNELS = {
   GET: 'user-profile:get',
   UPDATE: 'user-profile:update',
+  CHANGED: 'user-profile:changed',
 } as const

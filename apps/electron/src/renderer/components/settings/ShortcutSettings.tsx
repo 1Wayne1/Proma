@@ -296,12 +296,12 @@ export function ShortcutSettings(): React.ReactElement {
     return groups
   }, [])
 
-  const reregisterGlobalShortcut = React.useCallback(
+  const readGlobalShortcutStatus = React.useCallback(
     async (shortcutId: string): Promise<boolean> => {
       const def = DEFAULT_SHORTCUTS.find((s) => s.id === shortcutId)
       if (!def?.global) return true
 
-      const results = await window.electronAPI.reregisterGlobalShortcuts()
+      const results = await window.electronAPI.getGlobalShortcutRegistrationStatus()
       return results[shortcutId] !== false
     },
     [],
@@ -328,7 +328,7 @@ export function ShortcutSettings(): React.ReactElement {
         const def = DEFAULT_SHORTCUTS.find((s) => s.id === shortcutId)
         if (def?.global) {
           try {
-            const registered = await reregisterGlobalShortcut(shortcutId)
+            const registered = await readGlobalShortcutStatus(shortcutId)
             if (!registered) {
               toast.warning('快捷键已保存，但全局快捷键当前未注册', {
                 id: 'shortcut-save-warning',
@@ -354,7 +354,7 @@ export function ShortcutSettings(): React.ReactElement {
         return false
       }
     },
-    [overrides, reregisterGlobalShortcut, setOverrides],
+    [overrides, readGlobalShortcutStatus, setOverrides],
   )
 
   // 恢复单个快捷键默认值
@@ -371,7 +371,7 @@ export function ShortcutSettings(): React.ReactElement {
         const def = DEFAULT_SHORTCUTS.find((s) => s.id === shortcutId)
         if (def?.global) {
           try {
-            const registered = await reregisterGlobalShortcut(shortcutId)
+            const registered = await readGlobalShortcutStatus(shortcutId)
             if (!registered) {
               toast.warning('已恢复默认，但全局快捷键当前未注册', {
                 id: 'shortcut-save-warning',
@@ -394,7 +394,7 @@ export function ShortcutSettings(): React.ReactElement {
         toast.error('恢复默认快捷键失败', { id: 'shortcut-save-error' })
       }
     },
-    [overrides, reregisterGlobalShortcut, setOverrides],
+    [overrides, readGlobalShortcutStatus, setOverrides],
   )
 
   // 禁用单个快捷键：将当前平台 override 置为 null
@@ -417,9 +417,9 @@ export function ShortcutSettings(): React.ReactElement {
         const def = DEFAULT_SHORTCUTS.find((s) => s.id === shortcutId)
         if (def?.global) {
           try {
-            // 禁用语义下主进程会跳过 register，对应 reregisterGlobalShortcut 返回 false，
+            // 禁用语义下主进程会跳过 register，对应 readGlobalShortcutStatus 返回 false，
             // 这是期望结果，因此这里不像 handleSaveShortcut 那样把 false 当 warning。
-            await reregisterGlobalShortcut(shortcutId)
+            await readGlobalShortcutStatus(shortcutId)
           } catch (error) {
             console.error(error)
             toast.warning('快捷键已禁用，但主进程重新注册时出错', {
@@ -435,7 +435,7 @@ export function ShortcutSettings(): React.ReactElement {
         toast.error('禁用快捷键失败', { id: 'shortcut-save-error' })
       }
     },
-    [overrides, reregisterGlobalShortcut, setOverrides],
+    [overrides, readGlobalShortcutStatus, setOverrides],
   )
 
   // 恢复所有默认值（同时会清除所有"已禁用"标记）
@@ -449,7 +449,7 @@ export function ShortcutSettings(): React.ReactElement {
       updateShortcutOverrides({})
 
       try {
-        const results = await window.electronAPI.reregisterGlobalShortcuts()
+        const results = await window.electronAPI.getGlobalShortcutRegistrationStatus()
         const hasUnregisteredGlobal = Object.values(results).some((registered) => !registered)
         if (hasUnregisteredGlobal) {
           toast.warning('已恢复全部默认；部分全局快捷键当前未注册', {

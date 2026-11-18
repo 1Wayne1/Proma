@@ -197,6 +197,7 @@ export interface DetachedPreviewWindowInput {
 /** 独立预览窗口数据 */
 export interface DetachedPreviewWindowData extends DetachedPreviewWindowInput {
   id: string
+  presentation?: true
 }
 
 /** Revert 文件变更的输入 */

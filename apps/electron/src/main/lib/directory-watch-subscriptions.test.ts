@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, realpath, rm, symlink } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { DirectoryWatchSubscriptions } from './directory-watch-subscriptions'
@@ -48,7 +48,7 @@ test('Given 根操作锁与目录别名 When Agent 或终端尝试进入 Then �
     throw new Error('fixture failure')
   })).rejects.toThrow('fixture failure')
   assertNoProjectMutation([alias])
-  expect(canonicalProjectPath(join(alias, 'missing'))).toBe(join(actual, 'missing'))
+  expect(canonicalProjectPath(join(alias, 'missing'))).toBe(join(await realpath(actual), 'missing'))
 })
 
 test('Given 临时附加根及停止中的旧代次 When 查询和释放 Then 停止完成前仍保护目录且不释放新代次', async () => {

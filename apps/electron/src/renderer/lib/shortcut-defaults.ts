@@ -219,6 +219,15 @@ export const DEFAULT_SHORTCUTS: ShortcutDefinition[] = [
     global: true,
   },
   {
+    id: 'quick-capture-todo',
+    name: '快速记录 Todo',
+    description: '在任意应用中打开 Todo 和提醒输入框',
+    defaultMac: 'Cmd+Shift+T',
+    defaultWin: 'Ctrl+Shift+T',
+    category: 'global',
+    global: true,
+  },
+  {
     id: 'voice-dictation',
     name: '语音输入',
     description: '唤起豆包流式语音输入浮窗',

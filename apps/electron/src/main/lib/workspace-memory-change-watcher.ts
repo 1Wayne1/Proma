@@ -222,7 +222,7 @@ class WorkspaceMemoryWatcher {
 
 const watchersByRoot = new Map<string, WorkspaceMemoryWatcher>()
 export function subscribeWorkspaceMemoryChanges(workspaceSlug: string, callback: (change: WorkspaceMemoryFileChange) => void): () => void {
-  // Ensures migration, creates an absent root, and rejects non-directory/symlink roots.
+  // 监听已有受管根或其父目录，首次读取不创建记忆目录。
   const root = getWorkspaceAutoMemoryDir(workspaceSlug)
   let watcher = watchersByRoot.get(root)
   if (!watcher) { watcher = new WorkspaceMemoryWatcher(root); watchersByRoot.set(root, watcher) }

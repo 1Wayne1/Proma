@@ -1,6 +1,6 @@
 import { atom } from 'jotai'
 import { atomFamily } from 'jotai-family'
-import type { VaultReadResult } from '@proma/shared'
+import type { VaultPresentation, VaultReadResult } from '@proma/shared'
 
 /** A renderer can host several Agent sessions, each with independent Vault navigation. */
 export function getVaultSessionScope(sessionId?: string): string {
@@ -12,3 +12,6 @@ export const selectedVaultFileAtomFamily = atomFamily((sessionScope: string) => 
 export const focusedVaultFolderAtomFamily = atomFamily((sessionScope: string) => atom<string | null>(null))
 export const vaultReadResultAtomFamily = atomFamily((sessionScope: string) => atom<VaultReadResult | null>(null))
 export const vaultRefreshTokenAtom = atom(0)
+
+/** 仅目标会话的 Vault 消费该次展示，回执携带原请求 ID。 */
+export const vaultPresentationAtomFamily = atomFamily((sessionId: string) => atom<VaultPresentation | null>(null))

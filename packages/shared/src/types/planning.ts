@@ -137,6 +137,8 @@ export interface TodoSessionLink {
 
 export interface PlanningReminder {
   id: string
+  /** 同一提醒改期或推迟会生成新的到期实例。 */
+  occurrenceId: string
   targetType: PlanningReminderTargetType
   targetId: string
   triggerAt: number
@@ -316,10 +318,15 @@ export interface CreatePlanningReminderRequest extends CreatePlanningReminderInp
   targetId: string
 }
 
+export interface UpdatePlanningReminderInput extends CreatePlanningReminderInput {
+  id: string
+  occurrenceId: string
+}
 
 export interface SnoozePlanningReminderInput {
   id: string
   minutes: number
+  occurrenceId?: string
 }
 
 /** Pi Agent 成功修改本地规划数据后，供对应 Agent 会话展示即时反馈。 */
@@ -347,9 +354,13 @@ export const PLANNING_IPC_CHANNELS = {
   DELETE_GROUP: 'planning:delete-group',
   LIST_TAGS: 'planning:list-tags',
   LIST_ACTIVE_REMINDERS: 'planning:list-active-reminders',
+  CREATE_REMINDER: 'planning:create-reminder',
+  UPDATE_REMINDER: 'planning:update-reminder',
+  DELETE_REMINDER: 'planning:delete-reminder',
   ACKNOWLEDGE_REMINDER: 'planning:acknowledge-reminder',
   SNOOZE_REMINDER: 'planning:snooze-reminder',
   REMINDER_DUE: 'planning:reminder-due',
+  OPEN_QUICK_CAPTURE: 'planning:open-quick-capture',
   CHANGED: 'planning:changed',
   AGENT_OPERATION: 'planning:agent-operation',
   /** macOS Calendar / Reminders 连接设置（仅主进程可访问 EventKit）。 */

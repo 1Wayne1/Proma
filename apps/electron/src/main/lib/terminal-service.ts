@@ -3,6 +3,8 @@ import { assertNoProjectMutation, canonicalProjectPath, projectPathsOverlap } fr
 import { randomUUID } from 'node:crypto'
 import {
   TERMINAL_IPC_CHANNELS,
+  type AgentTerminalActivity,
+  type AgentTerminalCatalog,
   type AgentTerminalCloseEvent,
   type AgentTerminalOpenEvent,
   assertTerminalProfileSupported,
@@ -26,6 +28,7 @@ import {
 import { resolveAgentTerminalCwd } from './terminal-agent-policy'
 import { requireTerminalCwd, resolveTerminalCwd } from './terminal-cwd'
 import { terminalRuntimeClient } from './terminal-runtime-client'
+import { readTerminalProcessParents } from './terminal-agent-activity'
 
 const terminals = new Map<string, TerminalState>()
 const pendingTerminals = new Map<string, Promise<TerminalState>>()
@@ -34,8 +37,11 @@ const terminalSessionOwners = new Map<string, string>()
 const terminalCwds = new Map<string, string>()
 const terminalOutputBuffers = new Map<string, TerminalOutputBuffer>()
 const agentTerminals = new Map<string, AgentTerminalRecord>()
+const exitedAgentTerminalStates = new Map<string, TerminalState>()
 const MAX_REPLAY_CHARS = 1_000_000
 let initialized = false
+let activityTimer: ReturnType<typeof setTimeout> | undefined
+let activityProbe: AbortController | undefined
 
 export interface AgentTerminalRecord {
   sessionId: string
@@ -45,6 +51,54 @@ export interface AgentTerminalRecord {
   profile: TerminalProfile
   status: 'running' | 'exited'
   exitCode?: number
+  retained: boolean
+  active: boolean
+}
+
+function notifyAgentTerminalActivity(sessionId: string): void {
+  const terminalIds = getAgentTerminalList(sessionId).filter(record => record.active).map(record => record.terminalId)
+  const event: AgentTerminalActivity = { sessionId, terminalIds }
+  getMainWindow()?.webContents.send(TERMINAL_IPC_CHANNELS.AGENT_ACTIVITY, event)
+}
+
+function scheduleAgentTerminalActivity(): void {
+  if (![...agentTerminals.values()].some(record => record.status === 'running')) {
+    clearTimeout(activityTimer)
+    activityTimer = undefined
+    activityProbe?.abort()
+    return
+  }
+  if (activityTimer || activityProbe) return
+  activityTimer = setTimeout(() => {
+    activityTimer = undefined
+    void refreshAgentTerminalActivity()
+  }, process.platform === 'win32' ? 4_000 : 1_000)
+  activityTimer.unref()
+}
+
+async function refreshAgentTerminalActivity(): Promise<void> {
+  const probe = activityProbe = new AbortController()
+  try {
+    const owners = [...agentTerminals.values()].flatMap(record => {
+      const state = terminals.get(record.terminalId)
+      return state ? [{ record, state }] : []
+    })
+    const parents = await readTerminalProcessParents(probe.signal).catch(() => new Set<number>())
+    if (probe.signal.aborted) return
+    const changed = new Set<string>()
+    for (const { record, state } of owners) {
+      if (terminals.get(record.terminalId) !== state || agentTerminals.get(record.terminalId) !== record) continue
+      const active = parents.has(state.pid)
+      if (record.active !== active) {
+        record.active = active
+        changed.add(record.sessionId)
+      }
+    }
+    for (const sessionId of changed) notifyAgentTerminalActivity(sessionId)
+  } finally {
+    activityProbe = undefined
+    scheduleAgentTerminalActivity()
+  }
 }
 
 function initialize(): void {
@@ -53,9 +107,13 @@ function initialize(): void {
   terminalRuntimeClient.onOutput((event) => {
     if (!terminals.has(event.terminalId) && !pendingTerminals.has(event.terminalId)) return
     appendOutputBuffer(event)
+    // 主进程已接收并缓冲，隐藏标签页也必须推进流控，避免退出事件滞留。
+    terminalRuntimeClient.acknowledgeOutput(event)
     getMainWindow()?.webContents.send(TERMINAL_IPC_CHANNELS.OUTPUT, event)
   })
   terminalRuntimeClient.onExit((event) => {
+    const state = terminals.get(event.terminalId)
+    if (!state) return
     terminals.delete(event.terminalId)
     terminalCwds.delete(event.terminalId)
     const agentTerminal = agentTerminals.get(event.terminalId)
@@ -63,7 +121,14 @@ function initialize(): void {
       // Agent 可在命令退出后读取结果；缓冲会随显式关闭或会话回收一并释放。
       agentTerminal.status = 'exited'
       agentTerminal.exitCode = event.exitCode
+      agentTerminal.active = false
+      exitedAgentTerminalStates.set(event.terminalId, state)
+      notifyAgentTerminalActivity(agentTerminal.sessionId)
+      scheduleAgentTerminalActivity()
+      const priorExited = getAgentTerminalList(agentTerminal.sessionId).filter(record => record !== agentTerminal && record.status === 'exited' && !record.retained)
+      for (const record of priorExited.slice(0, -7)) closeAgentTerminal(record.sessionId, record.terminalId)
     } else {
+      terminalSessionOwners.delete(event.terminalId)
       terminalOutputBuffers.delete(event.terminalId)
     }
     getMainWindow()?.webContents.send(TERMINAL_IPC_CHANNELS.EXIT, event)
@@ -77,9 +142,13 @@ export async function createTerminal(
   initialize()
   validateTerminalId(input.terminalId)
   const existing = terminals.get(input.terminalId)
-  if (existing) return existing
   const pending = pendingTerminals.get(input.terminalId)
-  if (pending) return pending
+  if (existing || pending || agentTerminals.has(input.terminalId)) {
+    if (terminalSessionOwners.get(input.terminalId) !== input.sessionId) throw new Error('终端不属于当前会话')
+    if (existing) return existing
+    if (pending) return pending
+    throw new Error('Agent 终端已退出')
+  }
   const cwd = options.strictCwd ? requireTerminalCwd(input.cwd) : resolveTerminalCwd(input.cwd)
 
   assertNoProjectMutation([cwd])
@@ -142,8 +211,16 @@ export function killTerminal(terminalId: string): void {
   terminalSessionOwners.delete(terminalId)
   terminalCwds.delete(terminalId)
   terminalOutputBuffers.delete(terminalId)
+  exitedAgentTerminalStates.delete(terminalId)
+  const record = agentTerminals.get(terminalId)
   agentTerminals.delete(terminalId)
   terminalRuntimeClient.kill(terminalId)
+  if (record) {
+    const event: AgentTerminalCloseEvent = { sessionId: record.sessionId, terminalId }
+    getMainWindow()?.webContents.send(TERMINAL_IPC_CHANNELS.AGENT_CLOSE, event)
+    notifyAgentTerminalActivity(record.sessionId)
+    scheduleAgentTerminalActivity()
+  }
 }
 
 /** 为 Agent 创建其会话归属的可见终端，目录仍受现有文件授权范围限制；profile 决定交互 shell。 */
@@ -169,9 +246,13 @@ export async function openAgentTerminal(input: {
     resolvedProfile = 'default'
     await createTerminal({ terminalId, sessionId: input.sessionId, cwd, profile: resolvedProfile, cols: 80, rows: 24 }, { strictCwd: true })
   }
-  const record: AgentTerminalRecord = { sessionId: input.sessionId, terminalId, title, cwd, profile: resolvedProfile, status: 'running' }
+  if (!terminals.has(terminalId) || terminalSessionOwners.get(terminalId) !== input.sessionId) {
+    throw new Error('终端已退出或会话已关闭')
+  }
+  const record: AgentTerminalRecord = { sessionId: input.sessionId, terminalId, title, cwd, profile: resolvedProfile, status: 'running', retained: false, active: false }
   agentTerminals.set(terminalId, record)
   notifyAgentTerminalOpen(record)
+  scheduleAgentTerminalActivity()
   return record
 }
 
@@ -215,8 +296,28 @@ export async function executeAgentTerminal(input: {
   return record
 }
 
-export function listAgentTerminals(sessionId: string): AgentTerminalRecord[] {
+function getAgentTerminalList(sessionId: string): AgentTerminalRecord[] {
   return [...agentTerminals.values()].filter((record) => record.sessionId === sessionId)
+}
+
+export function listAgentTerminals(sessionId: string): AgentTerminalRecord[] {
+  return getAgentTerminalList(sessionId).map(record => ({ ...record }))
+}
+
+export function getAgentTerminalCatalog(): AgentTerminalCatalog {
+  const terminals = [...agentTerminals.values()].map(({ sessionId, terminalId, title, cwd, profile }) => ({ sessionId, terminalId, title, cwd, profile }))
+  const sessions = new Map<string, string[]>()
+  for (const record of agentTerminals.values()) {
+    if (!record.active) continue
+    const ids = sessions.get(record.sessionId) ?? []
+    ids.push(record.terminalId)
+    sessions.set(record.sessionId, ids)
+  }
+  return { terminals, activity: Array.from(sessions, ([sessionId, terminalIds]) => ({ sessionId, terminalIds })) }
+}
+
+export function retainAgentTerminal(sessionId: string, terminalId: string): void {
+  getOwnedAgentTerminal(sessionId, terminalId).retained = true
 }
 
 /** 读取当前 Agent 会话拥有的终端输出；只暴露有限内存回放缓冲，不读取其他会话或系统终端。 */
@@ -240,8 +341,6 @@ export async function interruptAgentTerminal(sessionId: string, terminalId: stri
 export function closeAgentTerminal(sessionId: string, terminalId: string): void {
   getOwnedAgentTerminal(sessionId, terminalId)
   killTerminal(terminalId)
-  const event: AgentTerminalCloseEvent = { sessionId, terminalId }
-  getMainWindow()?.webContents.send(TERMINAL_IPC_CHANNELS.AGENT_CLOSE, event)
 }
 
 /** 终止并回收指定 Agent 会话的全部交互和 Agent 执行终端。 */
@@ -253,10 +352,10 @@ export function closeTerminalsForSession(sessionId: string): void {
 
 export function getTerminalSnapshot(terminalId: string): TerminalSnapshot {
   validateTerminalId(terminalId)
-  const state = terminals.get(terminalId)
+  const state = terminals.get(terminalId) ?? exitedAgentTerminalStates.get(terminalId)
   if (!state) throw new Error('终端不存在')
   const buffer = terminalOutputBuffers.get(terminalId) ?? { output: '', sequence: 0, startOffset: 0, endOffset: 0 }
-  return { state, ...buffer }
+  return { state, ...buffer, exitCode: agentTerminals.get(terminalId)?.exitCode }
 }
 
 export function acknowledgeTerminalOutput(input: TerminalOutputAck): void {
@@ -274,6 +373,8 @@ export async function stopAllTerminals(): Promise<void> {
   terminalCwds.clear()
   terminalOutputBuffers.clear()
   agentTerminals.clear()
+  exitedAgentTerminalStates.clear()
+  scheduleAgentTerminalActivity()
   await terminalRuntimeClient.stop()
 }
 

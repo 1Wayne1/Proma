@@ -5,6 +5,7 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  opendirSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -14,11 +15,14 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { homedir, platform } from 'node:os'
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, posix, relative, resolve, sep } from 'node:path'
 import type {
   VaultCandidate,
   VaultConfig,
   VaultDeleteInput,
+  VaultDirectoryPage,
+  VaultLocateResult,
+  VaultWikiResolution,
   VaultTreeEntry,
   VaultFocus,
   VaultReadResult,
@@ -30,6 +34,7 @@ import type {
 } from '@proma/shared'
 import { getDefaultVaultDir, getVaultConfigPath, resolveDefaultVaultDir } from './config-paths'
 import { readJsonFileSafe, writeJsonFileAtomic, writeTextFileAtomic } from './safe-file'
+import { isMissingTurnFile, turnPathKey } from './turn-changes/paths'
 import { isValidImageBytes } from './image-content-validation'
 
 const MAX_VAULT_FILE_BYTES = 2 * 1024 * 1024
@@ -112,8 +117,9 @@ function getSafeVaultPath(rootPath: string, relativePath: string): { absolutePat
   let current = rootPath
   for (const segment of relativePath.split('/').filter(Boolean)) {
     current = join(current, segment)
-    if (!existsSync(current)) continue
-    const stats = lstatSync(current)
+    let stats
+    try { stats = lstatSync(current) }
+    catch (error) { if (isMissingTurnFile(error)) continue; throw error }
     if (stats.isSymbolicLink()) {
       throw new Error('Vault 不允许通过软链接访问文件')
     }
@@ -238,6 +244,10 @@ export function getVaultUserContext(sessionId: string): VaultUserContextSnapshot
 
 export interface VaultFileSystem {
   listFiles(): VaultTreeEntry[]
+  listDirectory(folderPath: string, cursor?: string): VaultDirectoryPage
+  locate(kind: 'file' | 'folder', relativePath: string): VaultLocateResult
+  folderPath(relativePath: string): string
+  resolveWiki(target: string, source: string): VaultWikiResolution
   readFile(relativePath: string): VaultReadResult
   resolveMedia(noteRelativePath: string, src: string): string | null
   savePastedImage(input: VaultSavePastedImageInput): { src: string } | null
@@ -306,13 +316,123 @@ export function createVaultFileSystem(rootPath: string): VaultFileSystem {
     return entries.sort((left, right) => left.relativePath.localeCompare(right.relativePath))
   }
 
+  const rootIdentity = vaultRootIdentity(root)
+  const checkRoot = (): void => {
+    if (turnPathKey(realpathSync(root)) !== turnPathKey(root) || vaultRootIdentity(root) !== rootIdentity) {
+      throw new Error('Vault 根目录已变化')
+    }
+  }
+
+  const entryAt = (kind: 'file' | 'folder', path: string): VaultTreeEntry => {
+    const target = kind === 'file' ? getSafeVaultTarget(root, path) : getSafeVaultFolderTarget(root, path)
+    const stat = lstatSync(target.absolutePath)
+    const name = basename(target.absolutePath)
+    if (kind === 'folder' && stat.isDirectory()) return { kind, relativePath: target.relativePath, name }
+    if (kind === 'file' && stat.isFile()) return { kind, relativePath: target.relativePath, name, size: stat.size, modifiedAt: stat.mtimeMs }
+    throw new Error('Vault 路径类型已变化')
+  }
+
+  const folderPath = (relativePath: string): string => {
+    checkRoot()
+    const folder = getSafeVaultFolderTarget(root, relativePath)
+    if (!lstatSync(folder.absolutePath).isDirectory()) throw new Error('Vault 文件夹已失效')
+    checkRoot()
+    return folder.absolutePath
+  }
+
+  const locate = (kind: 'file' | 'folder', relativePath: string): VaultLocateResult => {
+    checkRoot()
+    const entry = entryAt(kind, relativePath)
+    const parts = entry.relativePath.split('/').filter(Boolean)
+    const entries = parts.slice(0, -1).map((_, index) => entryAt('folder', parts.slice(0, index + 1).join('/')))
+    if (entry.relativePath) entries.push(entry)
+    checkRoot()
+    return { kind, relativePath: entry.relativePath, entries }
+  }
+
+  const listDirectory = (input: string, cursor?: string): VaultDirectoryPage => {
+    const folder = getSafeVaultFolderTarget(root, input)
+    const absolute = folderPath(folder.relativePath)
+    const before = lstatSync(absolute)
+    const stamp = sha256(JSON.stringify([rootIdentity, folder.relativePath, before.dev, before.ino, before.mtimeMs, before.ctimeMs]))
+    const [offsetText, expectedStamp] = cursor?.split(':') ?? []
+    const offset = cursor ? Number(offsetText) : 0
+    if (!Number.isSafeInteger(offset) || offset < 0 || (cursor && stamp !== expectedStamp)) {
+      throw new Error('Vault 文件夹已变化，请重新加载第一页')
+    }
+    const names = readdirSync(absolute, { withFileTypes: true })
+      .filter(entry => !entry.name.startsWith('.') && (entry.isDirectory() || (entry.isFile() && /\.md$/i.test(entry.name))))
+      .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory())
+        || a.name.localeCompare(b.name, undefined, { numeric: true }) || (a.name < b.name ? -1 : 1))
+    const pageSize = 100
+    const entries = names.slice(offset, offset + pageSize).flatMap(entry => {
+      try {
+        const path = folder.relativePath ? `${folder.relativePath}/${entry.name}` : entry.name
+        return [entryAt(entry.isDirectory() ? 'folder' : 'file', path)]
+      } catch { return [] }
+    })
+    const after = lstatSync(folderPath(folder.relativePath))
+    if (after.dev !== before.dev || after.ino !== before.ino || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) {
+      throw new Error('Vault 文件夹已变化，请重新加载第一页')
+    }
+    return { folderPath: folder.relativePath, entries, nextCursor: offset + pageSize < names.length ? `${offset + pageSize}:${stamp}` : null }
+  }
+
+  const resolveWiki = (target: string, source: string): VaultWikiResolution => {
+    checkRoot()
+    const from = normalizeRelativeMarkdownPath(source)
+    const note = target.trim().replace(/\\/g, '/').replace(/\.md$/i, '')
+    if (!note || note.length > 1024 || /[#^:\0]/.test(note) || isAbsolute(note)) return { status: 'missing' }
+    const explicitRelative = note.startsWith('./') || note.startsWith('../')
+    const path = explicitRelative ? posix.normalize(posix.join(posix.dirname(from), note)) : note
+    let normalized: string
+    try { normalized = normalizeRelativeMarkdownPath(`${path}.md`) }
+    catch { return { status: 'missing' } }
+    if (explicitRelative || note.includes('/')) {
+      try {
+        return { status: 'resolved', path: locate('file', normalized).relativePath }
+      } catch (error) {
+        if (!isMissingTurnFile(error)) return { status: 'missing' }
+      }
+      if (explicitRelative) return { status: 'missing' }
+    }
+    const matches: string[] = []
+    let visited = 0
+    let partial = false
+    const suffix = turnPathKey(normalized)
+    function walk(folder: string, depth: number): void {
+      if (depth > MAX_VAULT_DEPTH || visited >= 12000 || matches.length >= 20) { partial = true; return }
+      let directory
+      try { directory = opendirSync(folderPath(folder)) } catch { partial = true; return }
+      try {
+        for (let entry = directory.readSync(); entry; entry = directory.readSync()) {
+          if (++visited > 12000 || matches.length >= 20) { partial = true; break }
+          if (entry.name.startsWith('.') || entry.isSymbolicLink()) continue
+          const path = folder ? `${folder}/${entry.name}` : entry.name
+          if (entry.isDirectory()) walk(path, depth + 1)
+          if (!entry.isFile()) continue
+          const compared = turnPathKey(path)
+          if (compared !== suffix && !compared.endsWith('/' + suffix)) continue
+          try { matches.push(locate('file', path).relativePath) } catch { partial = true }
+        }
+      } finally { directory.closeSync() }
+    }
+    walk('', 0)
+    checkRoot()
+    if (matches.length > 1) return { status: 'ambiguous', paths: matches.sort(), partial }
+    if (partial) return { status: 'incomplete' }
+    return matches[0] ? { status: 'resolved', path: matches[0] } : { status: 'missing' }
+  }
+
   const readFile = (relativePath: string): VaultReadResult => {
+    checkRoot()
     const target = getSafeVaultTarget(root, relativePath)
     if (!existsSync(target.absolutePath)) throw new Error(`Vault 文件不存在: ${target.relativePath}`)
     const stats = lstatSync(target.absolutePath)
     if (!stats.isFile()) throw new Error('Vault 目标不是普通文件')
     if (stats.size > MAX_VAULT_FILE_BYTES) throw new Error('Vault 文件超过 2 MB 读取上限')
     const content = readFileSync(target.absolutePath, 'utf-8')
+    checkRoot()
     return {
       relativePath: target.relativePath,
       content,
@@ -500,9 +620,15 @@ export function createVaultFileSystem(rootPath: string): VaultFileSystem {
     unlinkSync(revalidated.absolutePath)
   }
 
-  return { listFiles, readFile, resolveMedia, savePastedImage, writeFile, createUntitledNote, createUntitledNoteInFolder, createFolder, renameFile, deleteFile }
+  return { listFiles, listDirectory, locate, folderPath, resolveWiki, readFile, resolveMedia, savePastedImage, writeFile, createUntitledNote, createUntitledNoteInFolder, createFolder, renameFile, deleteFile }
 }
 
+
+function vaultRootIdentity(path: string): string {
+  const stat = lstatSync(path)
+  if (!stat.isDirectory()) throw new Error('Vault 根目录已变化')
+  return `${stat.dev}:${stat.ino}`
+}
 
 function parseVaultConfig(value: unknown): VaultConfig | null {
   if (!value || typeof value !== 'object') return null
@@ -518,12 +644,16 @@ function parseVaultConfig(value: unknown): VaultConfig | null {
   }
   try {
     const rootPath = assertVaultRoot(config.rootPath)
+    const rootIdentity = vaultRootIdentity(rootPath)
+    if (turnPathKey(resolve(config.rootPath)) !== turnPathKey(rootPath) ||
+      (config.rootIdentity !== undefined && config.rootIdentity !== rootIdentity)) return null
     return {
       rootPath,
       displayName: config.displayName,
       inboxPath: normalizeRelativeMarkdownPath(join(config.inboxPath, 'placeholder.md')).replace(/\/placeholder\.md$/, ''),
       allowAgentWrites: config.allowAgentWrites,
       configuredAt: config.configuredAt,
+      rootIdentity,
     }
   } catch {
     return null
@@ -570,6 +700,7 @@ function configureVaultAt(rootPath: string, configPath: string, options: { inbox
   const isManagedRoot = existsSync(managedRootPath) && root === realpathSync(managedRootPath)
   const config: VaultConfig = {
     rootPath: root,
+    rootIdentity: vaultRootIdentity(root),
     displayName: isManagedRoot ? 'Proma Vault' : basename(root) || 'Vault',
     inboxPath: normalizedInboxPath,
     allowAgentWrites: options.allowAgentWrites === true,
@@ -596,9 +727,10 @@ export function authorizeDiscoveredVault(rootPath: string, options: { inboxPath?
 }
 
 
-export function getConfiguredVaultFileSystem(): VaultFileSystem {
+export function getConfiguredVaultFileSystem(expectedVaultId?: string): VaultFileSystem {
   const config = getVaultConfig()
   if (!config) throw new Error('尚未选择 Vault')
+  if (expectedVaultId !== undefined && vaultId(config.rootPath) !== expectedVaultId) throw new Error('Vault 已切换')
   return createVaultFileSystem(config.rootPath)
 }
 

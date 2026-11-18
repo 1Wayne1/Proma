@@ -2,7 +2,7 @@ import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { BookOpen, ChevronDown, ChevronLeft, ChevronRight, ChevronsUpDown, CircleHelp, Folder, FolderOpen, Loader2, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
-import type { VaultCandidate, VaultFileEntry, VaultFocus, VaultReadResult, VaultSummary, VaultTreeEntry } from '@proma/shared'
+import type { VaultCandidate, VaultDirectoryPage, VaultFileEntry, VaultFocus, VaultReadResult, VaultSummary, VaultTreeEntry } from '@proma/shared'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
-import { resolveVaultWikiLink } from './vault-wikilinks'
+import { readVaultNavigation, storeVaultNavigation, useVaultDirectoryPages } from './useVaultDirectoryPages'
 import { VaultLiveMarkdownEditor } from './VaultLiveMarkdownEditor'
 import { VaultNoteTitle } from './VaultNoteTitle'
 import { focusVaultBody } from './vault-title-focus'
@@ -41,12 +41,13 @@ import {
   selectedVaultFileAtomFamily,
   vaultReadResultAtomFamily,
   vaultRefreshTokenAtom,
+  vaultPresentationAtomFamily,
 } from '@/atoms/vault-atoms'
 import { cn } from '@/lib/utils'
 import { VaultContentErrorBoundary } from './VaultContentErrorBoundary'
 import { getVaultEditorKey, shouldRemountVaultEditor } from './vault-editor-lifecycle'
 import { getVaultDocumentController } from './vault-document-controller'
-import { buildVaultTree, getInitialVaultExpandedFolders, getVaultFolderAncestors, hasSameVaultTreeEntries, type VaultFolderNode } from './vault-tree-model'
+import { buildVaultTree, getInitialVaultExpandedFolders, getVaultFolderAncestors, type VaultFolderNode } from './vault-tree-model'
 import { getVaultSidebarDisplayWidth, getVaultSidebarToggleLabel } from './vault-sidebar-layout'
 
 const VAULT_NAME = 'Vault'
@@ -83,6 +84,7 @@ function VaultFileList({
   onCreateFolder,
   canCreate,
   treeAction,
+  folders, pending, errors, onPage, onOpenFolder,
 }: {
   entries: VaultTreeEntry[]
   selectedPath: string | null
@@ -94,6 +96,11 @@ function VaultFileList({
   onCreateFolder: (folderPath: string) => void
   canCreate: boolean
   treeAction: { type: 'expand' | 'collapse'; version: number }
+  folders: ReadonlyMap<string, VaultDirectoryPage>
+  pending: ReadonlySet<string>
+  errors: ReadonlyMap<string, string>
+  onPage: (path: string, mode: 'first' | 'more' | 'ensure') => void
+  onOpenFolder: (path: string) => void
 }): React.ReactElement {
   const tree = React.useMemo(() => buildVaultTree(entries), [entries])
   const allFolderPaths = React.useMemo(() => {
@@ -110,6 +117,15 @@ function VaultFileList({
   // Start collapsed: this prevents a large nested Vault from mounting every file
   // row and its Tooltip tree on first paint. Expanded paths survive list refreshes.
   const [expandedFolders, setExpandedFolders] = React.useState<ReadonlySet<string>>(getInitialVaultExpandedFolders)
+  const selectedButton = React.useRef<HTMLButtonElement>(null)
+  const pendingLocate = React.useRef<string | null>(null)
+  React.useEffect(() => { pendingLocate.current = selectedPath }, [selectedPath])
+  React.useEffect(() => {
+    if (selectedPath && pendingLocate.current === selectedPath && selectedButton.current) {
+      selectedButton.current.scrollIntoView({ block: 'nearest' })
+      pendingLocate.current = null
+    }
+  }, [selectedPath, expandedFolders, entries])
 
   React.useEffect(() => {
     if (treeAction.version === 0) return
@@ -166,6 +182,7 @@ function VaultFileList({
                     aria-label={`${expanded ? '收起' : '展开'}文件夹 ${child.name}`}
                     onClick={() => {
                       onFocusFolder(child.relativePath)
+                      if (!expanded) onPage(child.relativePath, 'ensure')
                       setExpandedFolders((current) => {
                         const next = new Set(current)
                         if (next.has(child.relativePath)) next.delete(child.relativePath)
@@ -187,6 +204,7 @@ function VaultFileList({
                 <ContextMenuContent className="z-[9999] w-40 min-w-0 p-0.5">
                   <ContextMenuItem disabled={!canCreate} onSelect={() => onCreateNote(child.relativePath)}>新建笔记</ContextMenuItem>
                   <ContextMenuItem disabled={!canCreate} onSelect={() => onCreateFolder(child.relativePath)}>新建文件夹</ContextMenuItem>
+                  <ContextMenuItem onSelect={() => onOpenFolder(child.relativePath)}>在文件管理器打开</ContextMenuItem>
                 </ContextMenuContent>
               </ContextMenu>
               {expanded && (
@@ -217,6 +235,7 @@ function VaultFileList({
               style={{ paddingLeft: `${18 + Math.min(depth, 6) * 14}px` }}
             >
               <button
+                ref={selected ? selectedButton : undefined}
                 type="button"
                 title={file.relativePath}
                 onClick={() => onSelect(file.relativePath)}
@@ -240,16 +259,26 @@ function VaultFileList({
             </div>
           )
         })}
+      {pending.has(folder.relativePath) && <p role="status" className="px-3 py-1 text-xs text-muted-foreground">读取文件夹…</p>}
+      {errors.has(folder.relativePath) && <div className="px-3 py-1 text-xs text-destructive" role="status">
+        {errors.get(folder.relativePath)}
+        <Button size="sm" variant="ghost" onClick={() => onPage(folder.relativePath, 'first')}>重试</Button>
+      </div>}
+      {!pending.has(folder.relativePath) && !errors.has(folder.relativePath) && (
+        folders.get(folder.relativePath)?.nextCursor
+          ? <Button size="sm" variant="ghost" onClick={() => onPage(folder.relativePath, 'more')}>加载更多</Button>
+          : !folders.has(folder.relativePath) && canCreate
+            ? <Button size="sm" variant="ghost" onClick={() => onPage(folder.relativePath, 'first')}>读取文件夹</Button>
+            : folder.files.length === 0 && folder.folders.size === 0
+              ? <p className="px-3 py-2 text-xs text-muted-foreground">没有 Markdown 笔记或文件夹</p>
+              : null
+      )}
     </>
   )
 
-  const hasEntries = entries.length > 0
-
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3 scrollbar-thin titlebar-no-drag">
-      {!hasEntries
-        ? <p className="px-4 py-6 text-center text-xs leading-relaxed text-muted-foreground">没有可显示的 Markdown 笔记或文件夹</p>
-        : renderEntries(tree, 0)}
+      {renderEntries(tree, 0)}
     </div>
   )
 }
@@ -654,12 +683,19 @@ export function VaultView({ embedded = false, sessionId }: { embedded?: boolean;
   const [candidates, setCandidates] = React.useState<VaultCandidate[]>([])
   const [vaultSwitcherOpen, setVaultSwitcherOpen] = React.useState(false)
   const [candidatesLoading, setCandidatesLoading] = React.useState(false)
-  const [entries, setEntries] = React.useState<VaultTreeEntry[]>([])
+  const { activate: activateVaultPages, entries, load: loadVaultPage, refreshLoaded: refreshVaultPages, pin: pinVaultEntries, folders, pending, errors } = useVaultDirectoryPages()
+  const [wikiCandidates, setWikiCandidates] = React.useState<{ paths: string[]; partial: boolean } | null>(null)
+  const [vaultPresentation, setVaultPresentation] = useAtom(vaultPresentationAtomFamily(vaultSessionScope))
+  const navigationVaultRef = React.useRef<string | null>(null)
+  const [navigationReady, setNavigationReady] = React.useState<string | null>(null)
+  const refreshRequestRef = React.useRef(0)
   const [loading, setLoading] = React.useState(true)
   const [fileLoading, setFileLoading] = React.useState(false)
   const [editorReopenVersion, setEditorReopenVersion] = React.useState(0)
   const [selectedFile, setSelectedFile] = useAtom(selectedVaultFileAtomFamily(vaultSessionScope))
   const [focusedFolder, setFocusedFolder] = useAtom(focusedVaultFolderAtomFamily(vaultSessionScope))
+  const focusedFolderRef = React.useRef(focusedFolder)
+  focusedFolderRef.current = focusedFolder
   const [readResult, setReadResult] = useAtom(vaultReadResultAtomFamily(vaultSessionScope))
   const [refreshToken, setRefreshToken] = useAtom(vaultRefreshTokenAtom)
   const [vaultHelpOpen, setVaultHelpOpen] = React.useState(false)
@@ -761,42 +797,75 @@ export function VaultView({ embedded = false, sessionId }: { embedded?: boolean;
   }, [selectedFile, updateAgentFocus])
 
   const refresh = React.useCallback(async ({ showLoading = false }: { showLoading?: boolean } = {}): Promise<void> => {
+    const refreshId = ++refreshRequestRef.current
     if (showLoading) setLoading(true)
     try {
       const nextConfig = await window.electronAPI.getVaultConfig()
-      setConfig(nextConfig)
-      const nextEntries = nextConfig ? await window.electronAPI.listVaultFiles() : []
-      setEntries((current) => hasSameVaultTreeEntries(current, nextEntries) ? current : nextEntries)
-      if (!nextConfig) {
-        selectFile(null)
+      if (refreshRequestRef.current !== refreshId) return
+      const id = nextConfig?.vaultId ?? null
+      const previousId = navigationVaultRef.current
+      const switching = previousId !== id
+      if (switching) {
+        setNavigationReady(null)
+        readRequestRef.current += 1
         setReadResult(null)
-      } else if (selectedFileRef.current) {
-        const relativePath = selectedFileRef.current
-        if (!nextEntries.some((entry) => entry.kind === 'file' && entry.relativePath === relativePath)) {
-          selectFile(null)
-          setReadResult(null)
-          toast.message('已打开的笔记不存在')
-          return
-        }
-        const requestId = ++readRequestRef.current
-        try {
-          const result = await window.electronAPI.readVaultFile(relativePath)
-          if (requestId === readRequestRef.current) setReadResult(result)
-        } catch (error) {
-          if (requestId === readRequestRef.current) {
-            toast.error(error instanceof Error ? error.message : '无法刷新已打开的笔记')
-          }
-        } finally {
-          // 刷新可能接管尚未完成的导航读取，也负责结束该请求的加载态。
-          if (requestId === readRequestRef.current) setFileLoading(false)
-        }
+        setWikiCandidates(null)
       }
+      navigationVaultRef.current = id
+      vaultIdRef.current = id ?? undefined
+      setConfig(nextConfig)
+      activateVaultPages(id)
+      if (!id) { selectFile(null); setFocusedFolder(null); return }
+
+      const saved = switching ? readVaultNavigation(id, vaultSessionScope) : null
+      const currentFile = switching && previousId ? saved?.file ?? null : selectedFileRef.current ?? saved?.file ?? null
+      const currentFolder = switching && previousId ? saved?.folder ?? null : focusedFolderRef.current ?? saved?.folder ?? null
+      const requestId = ++readRequestRef.current
+      const isCurrent = () => mountedRef.current && vaultIdRef.current === id && readRequestRef.current === requestId
+      const loadingRoot = refreshVaultPages(id)
+      if (isCurrent() && (currentFile || currentFolder)) {
+        const kind = currentFile ? 'file' : 'folder'
+        const path = currentFile ?? currentFolder ?? ''
+        try {
+          const [located, secondary, result] = await Promise.all([
+            window.electronAPI.locateVaultEntry(id, kind, path),
+            currentFile && currentFolder ? window.electronAPI.locateVaultEntry(id, 'folder', currentFolder).catch(() => null) : null,
+            currentFile ? window.electronAPI.readVaultFile(currentFile, id) : null,
+          ])
+          if (isCurrent()) {
+            pinVaultEntries(id, [...located.entries, ...(secondary?.entries ?? [])])
+            selectFile(currentFile)
+            setFocusedFolder(currentFile && !secondary ? null : currentFolder)
+            setReadResult(result)
+          }
+        } catch (error) {
+          if (isCurrent()) {
+            selectFile(null)
+            setFocusedFolder(null)
+            setReadResult(null)
+            toast.error(error instanceof Error ? error.message : '无法恢复 Vault 导航')
+          }
+        }
+      } else if (isCurrent() && switching) {
+        selectFile(null)
+        setFocusedFolder(null)
+      }
+      await loadingRoot
+      if (refreshRequestRef.current === refreshId) setNavigationReady(id)
+      if (isCurrent()) setFileLoading(false)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : `无法读取 ${VAULT_NAME}`)
+      if (refreshRequestRef.current === refreshId) toast.error(error instanceof Error ? error.message : `无法读取 ${VAULT_NAME}`)
     } finally {
-      if (showLoading) setLoading(false)
+      if (refreshRequestRef.current === refreshId) setLoading(false)
     }
-  }, [selectFile, setReadResult])
+  }, [activateVaultPages, pinVaultEntries, refreshVaultPages, selectFile, setFocusedFolder, setReadResult, vaultSessionScope])
+
+  React.useEffect(() => {
+    if (!config || loading || !selectedFile && !focusedFolder) return
+    if (navigationVaultRef.current === config.vaultId && navigationReady === config.vaultId) {
+      storeVaultNavigation(config.vaultId, vaultSessionScope, { file: selectedFile, folder: focusedFolder })
+    }
+  }, [config, focusedFolder, loading, navigationReady, selectedFile, vaultSessionScope])
 
   React.useEffect(() => {
     const showLoading = initialRefreshRef.current
@@ -810,14 +879,15 @@ export function VaultView({ embedded = false, sessionId }: { embedded?: boolean;
   React.useEffect(() => {
     const relativePath = readResult?.relativePath
     const sha256 = readResult?.sha256
-    if (!relativePath || !sha256) return
+    const vaultId = config?.vaultId
+    if (!relativePath || !sha256 || !vaultId) return
     let cancelled = false
     let checking = false
     const checkCurrentFile = async (): Promise<void> => {
       if (checking || cancelled || selectedFileRef.current !== relativePath) return
       checking = true
       try {
-        const next = await window.electronAPI.readVaultFile(relativePath)
+        const next = await window.electronAPI.readVaultFile(relativePath, vaultId)
         if (!cancelled && selectedFileRef.current === relativePath && next.sha256 !== sha256) setReadResult(next)
       } catch {
         // A concurrent rename/delete follows the existing refresh and open-file
@@ -831,7 +901,7 @@ export function VaultView({ embedded = false, sessionId }: { embedded?: boolean;
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [readResult?.relativePath, readResult?.sha256, setReadResult])
+  }, [config?.vaultId, readResult?.relativePath, readResult?.sha256, setReadResult])
 
   const refreshVaultCandidates = React.useCallback(async (): Promise<void> => {
     setCandidatesLoading(true)
@@ -850,43 +920,71 @@ export function VaultView({ embedded = false, sessionId }: { embedded?: boolean;
 
   const openFile = React.useCallback(async (
     relativePath: string,
-    { discardLocalDraft = false, forceReopen = false }: { discardLocalDraft?: boolean; forceReopen?: boolean } = {},
-  ): Promise<void> => {
-    if (!discardLocalDraft && !await flushCurrentEditor()) return
+    { discardLocalDraft = false, forceReopen = false, expectedId, confirm }: {
+      discardLocalDraft?: boolean; forceReopen?: boolean; expectedId?: string; confirm?: () => Promise<boolean>
+    } = {},
+  ): Promise<boolean> => {
+    const id = expectedId ?? vaultIdRef.current
+    if (!id || id !== vaultIdRef.current || (!discardLocalDraft && !await flushCurrentEditor())) return false
     const remountEditor = shouldRemountVaultEditor(selectedFileRef.current, relativePath, forceReopen)
     const requestId = ++readRequestRef.current
-    selectFile(relativePath)
+    const isCurrent = () => mountedRef.current && requestId === readRequestRef.current && vaultIdRef.current === id
     setFileLoading(true)
     try {
-      const result = await window.electronAPI.readVaultFile(relativePath)
-      if (requestId === readRequestRef.current) {
-        setReadResult(result)
-        // Only the explicit conflict-recovery action recreates the editor.
-        // Repeated ordinary clicks must preserve its CodeMirror instance.
-        if (remountEditor) setEditorReopenVersion((version) => version + 1)
-      }
+      const [result, located] = await Promise.all([
+        window.electronAPI.readVaultFile(relativePath, id),
+        window.electronAPI.locateVaultEntry(id, 'file', relativePath),
+      ])
+      if (!isCurrent() || (confirm && !await confirm()) || !isCurrent()) return false
+      pinVaultEntries(id, located.entries)
+      selectFile(result.relativePath)
+      setFocusedFolder(null)
+      setReadResult(result)
+      if (remountEditor) setEditorReopenVersion(version => version + 1)
+      const parent = result.relativePath.split('/').slice(0, -1).join('/')
+      void loadVaultPage(id, parent)
+      return true
     } catch (error) {
-      if (requestId === readRequestRef.current) {
-        // The tree can be stale when a note is deleted or renamed outside this
-        // renderer. Refresh it once so the unavailable note is removed.
+      if (isCurrent()) {
         if (isVaultFileNotFoundError(error)) void refresh()
         toast.error(error instanceof Error ? error.message : '无法打开笔记')
-        setReadResult(null)
       }
+      return false
     } finally {
-      if (requestId === readRequestRef.current) setFileLoading(false)
+      if (isCurrent()) setFileLoading(false)
     }
-  }, [flushCurrentEditor, refresh, selectFile, setReadResult])
+  }, [flushCurrentEditor, loadVaultPage, pinVaultEntries, refresh, selectFile, setFocusedFolder, setReadResult])
+
+  React.useEffect(() => {
+    if (!vaultPresentation || vaultPresentation.sessionId !== sessionId || loading) return
+    const request = vaultPresentation
+    let current = true
+    const receipt = (outcome: 'presented' | 'cancelled') => window.electronAPI.finishVaultPresentation({
+      sessionId: request.sessionId, turnId: request.turnId, requestId: request.requestId, outcome,
+    })
+    void (async () => {
+      const opened = vaultIdRef.current === request.vaultId && await openFile(request.relativePath, {
+        expectedId: request.vaultId,
+        confirm: () => current ? receipt('presented') : Promise.resolve(false),
+      })
+      if (!opened && current) await receipt('cancelled').catch(() => {})
+      if (current) setVaultPresentation(value => value?.requestId === request.requestId ? null : value)
+    })()
+    return () => { current = false; void receipt('cancelled').catch(() => {}) }
+  }, [loading, openFile, sessionId, setVaultPresentation, vaultPresentation])
 
   const openWikiLink = React.useCallback((target: string): void => {
-    if (!readResult) return
-    const path = resolveVaultWikiLink(target, readResult.relativePath, entries.filter((entry) => entry.kind === 'file').map((entry) => entry.relativePath))
-    if (!path) {
-      toast.error(`无法定位笔记“${target}”，请检查名称或使用完整的 Vault 内路径`)
-      return
-    }
-    void openFile(path)
-  }, [entries, readResult, openFile])
+    const id = vaultIdRef.current
+    const source = readResult?.relativePath
+    if (!id || !source) return
+    const requestId = readRequestRef.current
+    void window.electronAPI.resolveVaultWiki(id, target, source).then(result => {
+      if (!mountedRef.current || vaultIdRef.current !== id || readRequestRef.current !== requestId) return
+      if (result.status === 'resolved') void openFile(result.path)
+      else if (result.status === 'ambiguous') setWikiCandidates(result)
+      else toast.error(result.status === 'incomplete' ? '搜索范围过大，请使用完整 Vault 路径' : `无法定位笔记“${target}”`)
+    }).catch(error => toast.error(error instanceof Error ? error.message : '无法解析笔记链接'))
+  }, [readResult, openFile])
 
   const selectVaultManually = async (): Promise<void> => {
     if (!await flushCurrentEditor()) return
@@ -973,6 +1071,13 @@ export function VaultView({ embedded = false, sessionId }: { embedded?: boolean;
       setNewFolderParentPath(null)
       // Reveal the new folder even when its parent was collapsed. The same
       // focus is sent to the Agent so the sidebar and session context agree.
+      if (config) {
+        const id = config.vaultId
+        const located = await window.electronAPI.locateVaultEntry(id, 'folder', relativePath)
+        if (vaultIdRef.current !== id) return
+        pinVaultEntries(id, located.entries)
+        void loadVaultPage(id, newFolderParentPath, 'first')
+      }
       setFocusedFolder(relativePath)
       updateAgentFocus({ kind: 'folder', relativePath })
       setRefreshToken((value) => value + 1)
@@ -997,8 +1102,6 @@ export function VaultView({ embedded = false, sessionId }: { embedded?: boolean;
         sha256: result.sha256,
         modifiedAt: result.modifiedAt,
       } : previous)
-      const nextEntries = await window.electronAPI.listVaultFiles()
-      setEntries((current) => hasSameVaultTreeEntries(current, nextEntries) ? current : nextEntries)
       if (!silent) toast.success(`已保存到 ${VAULT_NAME}`)
       return result
     } catch (error) {
@@ -1141,7 +1244,7 @@ export function VaultView({ embedded = false, sessionId }: { embedded?: boolean;
                     <TooltipTrigger asChild>
                       <button
                         type="button"
-                        aria-label={vaultTreeAction.type === 'expand' ? '全部折叠文件树' : '全部展开文件树'}
+                        aria-label={vaultTreeAction.type === 'expand' ? '全部折叠文件树' : '展开已加载的文件夹'}
                         onClick={() => setVaultTreeAction((current) => ({
                           type: current.type === 'expand' ? 'collapse' : 'expand',
                           version: current.version + 1,
@@ -1151,7 +1254,7 @@ export function VaultView({ embedded = false, sessionId }: { embedded?: boolean;
                         <ChevronsUpDown size={15} />
                       </button>
                     </TooltipTrigger>
-                    <TooltipContent>{vaultTreeAction.type === 'expand' ? '全部折叠' : '全部展开'}</TooltipContent>
+                    <TooltipContent>{vaultTreeAction.type === 'expand' ? '全部折叠' : '展开已加载文件夹'}</TooltipContent>
                   </Tooltip>
                   {config && (
                     <Tooltip>
@@ -1169,13 +1272,21 @@ export function VaultView({ embedded = false, sessionId }: { embedded?: boolean;
                 entries={entries}
                 selectedPath={selectedFile}
                 focusedFolder={focusedFolder}
-                onSelect={(path) => { setFocusedFolder(null); void openFile(path) }}
+                onSelect={(path) => { void openFile(path) }}
                 onFocusFolder={(relativePath) => { setFocusedFolder(relativePath); updateAgentFocus({ kind: 'folder', relativePath }) }}
                 onDelete={setDeleteTarget}
                 onCreateNote={(folderPath) => { void createNoteInFolder(folderPath) }}
                 onCreateFolder={openCreateFolderDialog}
                 canCreate={config !== null}
                 treeAction={vaultTreeAction}
+                folders={folders}
+                pending={pending}
+                errors={errors}
+                onPage={(path, mode) => { if (config) void loadVaultPage(config.vaultId, path, mode) }}
+                onOpenFolder={path => {
+                  if (config) void window.electronAPI.openVaultFolder(config.vaultId, path)
+                    .catch(error => toast.error(error instanceof Error ? error.message : '无法打开文件夹'))
+                }}
               />
               <div className="titlebar-no-drag flex shrink-0 items-center border-t border-border/50 p-2">
                 <Popover
@@ -1265,6 +1376,20 @@ export function VaultView({ embedded = false, sessionId }: { embedded?: boolean;
           />
         </div>
       </main>
+      <Dialog open={wikiCandidates !== null} onOpenChange={open => { if (!open) setWikiCandidates(null) }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>选择匹配的笔记</DialogTitle>
+            <DialogDescription>{wikiCandidates?.partial ? '只显示部分候选。也可以在链接中指定完整路径。' : 'Vault 中有多个匹配路径。'}</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-64 space-y-1 overflow-auto">
+            {wikiCandidates?.paths.map(path => <Button key={path} variant="ghost" className="w-full justify-start" onClick={() => {
+              setWikiCandidates(null)
+              void openFile(path)
+            }}>{path}</Button>)}
+          </div>
+        </DialogContent>
+      </Dialog>
       <ConfirmDialog
         open={deleteTarget !== null}
         onOpenChange={(open) => { if (!open) setDeleteTarget(null) }}

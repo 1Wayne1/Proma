@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import * as os from 'node:os'
 import { join } from 'node:path'
 
@@ -161,6 +161,86 @@ describe('Agent 会话 JSONL 读取', () => {
 })
 
 describe('Agent 会话 runtime 元数据', () => {
+  test('Given v2 保留了布尔速度的 Pi 会话 When 迁移 Then 速度可恢复且不会误标为 Claude 历史', () => {
+    const path = join(tempHome, '.proma', 'agent-sessions.json')
+    const entries = createIndexedSessions(3)
+    writeFileSync(path, JSON.stringify({
+      version: 2,
+      sessions: [
+        { ...entries[0], codexFastMode: true },
+        { ...entries[1], codexFastMode: false },
+        { ...entries[2], codexFastMode: true, codexSpeed: 'ultrafast', narrationMode: 'explain', archived: true },
+      ],
+    }))
+    const migrated = manager.getAgentSessionMeta('session-0')
+    expect(migrated).toMatchObject({ codexSpeed: 'fast', codexFastMode: true })
+    expect(migrated?.legacyTranscript).toBeUndefined()
+    expect(manager.getAgentSessionMeta('session-1')).toMatchObject({ codexSpeed: 'standard', codexFastMode: false })
+    expect(manager.getAgentSessionMeta('session-2')).toMatchObject({ codexSpeed: 'ultrafast', narrationMode: 'explain', archived: true })
+    const persisted = readFileSync(path, 'utf8')
+    expect(JSON.parse(persisted).version).toBe(3)
+    expect(manager.getAgentSessionMeta('session-0')?.codexSpeed).toBe('fast')
+    expect(readFileSync(path, 'utf8')).toBe(persisted)
+  })
+
+  test('Given 两个项目 When 归档、重读和恢复 Then 会话原有归档状态与项目归属保持', async () => {
+    const workspace = await import('./agent-workspace-manager')
+    writeAgentWorkspacesIndex([
+      { id: 'workspace-a', slug: 'workspace-a', name: '甲', createdAt: 1, updatedAt: 1 },
+      { id: 'workspace-b', slug: 'workspace-b', name: '乙', createdAt: 2, updatedAt: 2 },
+    ])
+    writeAgentSessionsIndex([{ ...createIndexedSessions(1)[0]!, agentRuntime: 'pi' }])
+    expect(workspace.setWorkspaceArchived('workspace-a', true).archived).toBe(true)
+    expect(workspace.listAgentWorkspaces().find(item => item.id === 'workspace-a')?.archived).toBe(true)
+    expect(() => workspace.setWorkspaceArchived('workspace-b', true)).toThrow('活跃项目')
+    expect(manager.getAgentSessionMeta('session-0')?.workspaceId).toBe('workspace-a')
+    expect(manager.getAgentSessionMeta('session-0')?.archived).toBeUndefined()
+    expect(workspace.setWorkspaceArchived('workspace-a', false).archived).toBe(false)
+  })
+
+  test('Given 本地 Skill 激活、失败的读取及跨项目同名记录 When 统计 Then 按实际使用会话去重并保持隔离', async () => {
+    const { getWorkspaceSkillUsage } = await import('./skill-usage-service')
+    const workspace = { id: 'usage', slug: 'usage', name: 'Usage', createdAt: 1, updatedAt: 1 }
+    writeAgentWorkspacesIndex([workspace])
+    writeAgentSessionsIndex(createIndexedSessions(2).map((session, index) => ({
+      ...session,
+      workspaceId: index === 0 ? workspace.id : 'other',
+      agentRuntime: 'pi',
+    })))
+    const activation = (workspaceSlug: string, slug: string) => ({
+      slug, name: slug, workspaceSlug, workspaceSkillPath: `${slug}/SKILL.md`, sources: ['explicit'],
+    })
+    const messages = [
+      { type: 'user', skill_activations: [activation('other', 'example'), activation(workspace.slug, 'example')] },
+      { type: 'user', skill_activations: [activation(workspace.slug, 'example')] },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Read', id: 'failed', input: { file_path: join(tempHome, '.proma', 'agent-workspaces', 'usage', 'skills', 'failed', 'SKILL.md') } }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'failed', is_error: true }] } },
+    ]
+    writeAgentSessionJsonl('session-0', messages.map(message => JSON.stringify(message)))
+    writeAgentSessionJsonl('session-1', [JSON.stringify({ type: 'user', skill_activations: [activation(workspace.slug, 'out-of-scope')] })])
+    expect(await getWorkspaceSkillUsage(workspace)).toEqual({ sessionsBySlug: { example: 1 }, partial: false })
+  })
+
+  test('Given 已下线渠道 When 迁移并消费通知 Then 只返回非敏感摘要且重读不会重复提示', async () => {
+    const { getChannelsPath } = await import('./config-paths')
+    const { listChannels, consumeChannelRemovalNotices } = await import('./channel-manager')
+    const path = getChannelsPath()
+    writeFileSync(path, JSON.stringify({
+      version: 7,
+      channels: [
+        { id: 'removed', name: '历史渠道', provider: 'opencode-go-openai', baseUrl: 'https://old.example', apiKey: 'fixture-key', models: [], enabled: true },
+        { id: 'kept', name: '保留渠道', provider: 'deepseek', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'fixture-key', models: [], enabled: true },
+      ],
+    }))
+    try {
+      expect(listChannels().map(channel => channel.id)).toEqual(['kept'])
+      expect(consumeChannelRemovalNotices()).toEqual([{ id: 'removed', name: '历史渠道', reason: 'retired' }])
+      expect(consumeChannelRemovalNotices()).toEqual([])
+    } finally {
+      rmSync(path, { force: true })
+    }
+  })
+
   test('Given 已保存 OpenAI medium 默认值 When 新建会话 Then 始终创建并持久化 Pi 会话', () => {
     const settingsPath = join(tempHome, '.proma', 'settings.json')
     mkdirSync(join(tempHome, '.proma'), { recursive: true })

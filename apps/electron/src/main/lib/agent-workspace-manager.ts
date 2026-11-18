@@ -10,6 +10,7 @@ import { notifyWorkspaceResourcesChanged } from './workspace-resource-events'
 import { readFileSync, writeFileSync, existsSync, readdirSync, cpSync, mkdirSync, statSync, lstatSync, openSync, readSync, closeSync, realpathSync } from 'node:fs'
 import { cp as cpAsync, readFile as readFileAsync, realpath as realpathAsync, writeFile as writeFileAsync } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
+import { AgentMemoryService } from './agent-memory'
 import { writeExistingSkillFile } from './skill-file-write'
 import { rmSyncWithRetry, renameIfDestinationAbsentWithRetry, renameWithRetry } from './fs-retry'
 import { getLocalProjectRootStatus } from './project-root-health'
@@ -18,6 +19,8 @@ import { randomUUID } from 'node:crypto'
 import { join, resolve, relative, isAbsolute, dirname, basename } from 'node:path'
 import {
   getAgentWorkspacesIndexPath,
+  resolveAgentWorkspacePath,
+  resolveConfigDir,
   getAgentWorkspacesDir,
   getAgentWorkspacePath,
   getWorkspaceMcpPath,
@@ -366,6 +369,22 @@ export async function updateAgentWorkspace(
   return projectRootStatus ? { ...updated, projectRootStatus } : updated
 }
 
+/** 归档只改变索引显示状态，保留会话、配置与项目文件。 */
+export function setWorkspaceArchived(id: string, archived: boolean): AgentWorkspace {
+  const index = readIndex()
+  const position = index.workspaces.findIndex(workspace => workspace.id === id)
+  const current = index.workspaces[position]
+  if (!current) throw new Error('项目不存在')
+  if (Boolean(current.archived) === archived) return { ...current }
+  if (archived && !index.workspaces.some(workspace => workspace.id !== id && !workspace.archived)) {
+    throw new Error('请至少保留一个活跃项目')
+  }
+  const updated = { ...current, archived, updatedAt: Date.now() }
+  index.workspaces[position] = updated
+  writeIndex(index)
+  return updated
+}
+
 /** 将本地项目重新关联到一个已有文件夹，保留项目、会话与配置。 */
 export async function relinkAgentWorkspaceProjectRoot(id: string, projectRootPath: string): Promise<AgentWorkspace> {
   let normalizedProjectRootPath: string
@@ -441,8 +460,8 @@ export function deleteAgentWorkspace(id: string): void {
   if (target.slug === 'default') {
     throw new Error('默认项目不能删除')
   }
-  if (index.workspaces.length <= 1) {
-    throw new Error('至少需要保留一个项目')
+  if (!index.workspaces.some(workspace => workspace.id !== id && !workspace.archived)) {
+    throw new Error('至少需要保留一个活跃项目')
   }
 
   const workspacesRoot = resolve(getAgentWorkspacesDir())
@@ -495,7 +514,6 @@ export function ensureDefaultWorkspace(): AgentWorkspace {
   }
 
   migrateWorkspaceInstructionFiles()
-  migrateWorkspaceAutoMemoryDirectories()
   return defaultWs
 }
 
@@ -1278,116 +1296,6 @@ export function migrateWorkspaceInstructionFiles(): void {
   }
 }
 
-interface WorkspaceAutoMemoryMigrationResult {
-  conflictingPaths: string[]
-  issue?: NonNullable<WorkspaceMemorySummary['legacyAutoMemory']>['migrationIssue']
-  symbolicLinkPath?: string
-}
-
-function findSymbolicLinkInDirectory(rootDir: string, currentDir = rootDir): string | undefined {
-  const entries = readdirSync(currentDir, { withFileTypes: true })
-
-  for (const entry of entries) {
-    const entryPath = join(currentDir, entry.name)
-    if (entry.isSymbolicLink()) {
-      return relative(rootDir, entryPath).split(/[\\/]/).join('/')
-    }
-    if (entry.isDirectory()) {
-      const nested = findSymbolicLinkInDirectory(rootDir, entryPath)
-      if (nested) return nested
-    }
-  }
-  return undefined
-}
-
-/**
- * 将旧版 `.claude/memory/` 迁移到工作区根的 `memory/`。
- *
- * 目标目录不存在时使用目录 rename，确保同一卷内迁移原子完成。若用户已经
- * 创建了新目录，则仅移动不冲突的顶层条目；冲突内容继续保留在旧目录，交给
- * 能力中心提示用户处理，绝不覆盖或悄悄合并长期记忆。检测到符号链接或文件
- * 系统错误时安全中止，避免将受管根目录扩展到工作区外。
- */
-function migrateWorkspaceAutoMemoryDirectory(workspaceSlug: string): WorkspaceAutoMemoryMigrationResult | undefined {
-  const workspaceRoot = getAgentWorkspacePath(workspaceSlug)
-  const legacyDir = join(workspaceRoot, LEGACY_AUTO_MEMORY_DIR)
-  const memoryDir = join(workspaceRoot, AUTO_MEMORY_DIR)
-
-  if (!existsSync(legacyDir)) return undefined
-  if (!isRegularDirectory(legacyDir)) {
-    console.warn(`[Agent 工作区] 旧记忆路径不是普通目录，已跳过迁移: ${legacyDir}`)
-    return { conflictingPaths: [], issue: 'legacy_path_invalid' }
-  }
-
-  let symbolicLinkPath: string | undefined
-  try {
-    symbolicLinkPath = findSymbolicLinkInDirectory(legacyDir)
-  } catch (error) {
-    console.warn(`[Agent 工作区] 无法安全扫描旧长期记忆目录，已跳过迁移 (${workspaceSlug}):`, error)
-    return { conflictingPaths: [], issue: 'migration_failed' }
-  }
-  if (symbolicLinkPath) {
-    console.warn(`[Agent 工作区] 旧长期记忆包含符号链接，已跳过迁移: ${legacyDir}/${symbolicLinkPath}`)
-    return { conflictingPaths: [], issue: 'contains_symbolic_link', symbolicLinkPath }
-  }
-
-  if (!existsSync(memoryDir)) {
-    try {
-      if (renameIfDestinationAbsentWithRetry(legacyDir, memoryDir)) {
-        console.log(`[Agent 工作区] 已迁移长期记忆目录: ${workspaceSlug}/${LEGACY_AUTO_MEMORY_DIR} → ${AUTO_MEMORY_DIR}`)
-        return undefined
-      }
-    } catch (error) {
-      console.warn(`[Agent 工作区] 迁移长期记忆目录失败，已保留旧目录 (${workspaceSlug}):`, error)
-      return { conflictingPaths: [], issue: 'migration_failed' }
-    }
-  }
-
-  if (!isRegularDirectory(memoryDir)) {
-    console.warn(`[Agent 工作区] 新记忆路径不是普通目录，已保留旧目录: ${memoryDir}`)
-    return { conflictingPaths: [], issue: 'target_path_invalid' }
-  }
-
-  const conflicts: string[] = []
-  try {
-    for (const entry of readdirSync(legacyDir)) {
-      const source = join(legacyDir, entry)
-      const target = join(memoryDir, entry)
-      if (existsSync(target)) {
-        conflicts.push(entry)
-        continue
-      }
-      try {
-        if (!renameIfDestinationAbsentWithRetry(source, target)) {
-          conflicts.push(entry)
-        }
-      } catch (error) {
-        console.warn(`[Agent 工作区] 迁移长期记忆条目失败，已保留旧条目 (${workspaceSlug}/${entry}):`, error)
-        return { conflictingPaths: conflicts.sort(), issue: 'migration_failed' }
-      }
-    }
-
-    if (readdirSync(legacyDir).length === 0) {
-      rmSyncWithRetry(legacyDir, { recursive: true, force: true })
-      console.log(`[Agent 工作区] 已清理空的旧长期记忆目录: ${workspaceSlug}/${LEGACY_AUTO_MEMORY_DIR}`)
-      return undefined
-    }
-  } catch (error) {
-    console.warn(`[Agent 工作区] 扫描旧长期记忆目录失败，已保留旧目录 (${workspaceSlug}):`, error)
-    return { conflictingPaths: conflicts.sort(), issue: 'migration_failed' }
-  }
-
-  return { conflictingPaths: conflicts.sort() }
-}
-
-/** 在应用启动时迁移全部已知工作区；重复调用不会覆盖新目录内容。 */
-export function migrateWorkspaceAutoMemoryDirectories(): void {
-  const index = readIndex()
-  for (const workspace of index.workspaces) {
-    migrateWorkspaceAutoMemoryDirectory(workspace.slug)
-  }
-}
-
 function fileSummary(absPath: string): WorkspaceMemorySummary['agentsMd'] {
   if (!existsSync(absPath)) {
     return { exists: false, path: absPath, size: 0 }
@@ -1406,16 +1314,20 @@ export function getWorkspaceAgentsMdPath(workspaceSlug: string): string {
 }
 
 function getWorkspaceAutoMemoryPath(workspaceSlug: string): string {
-  migrateWorkspaceAutoMemoryDirectory(workspaceSlug)
-  return join(getAgentWorkspacePath(workspaceSlug), AUTO_MEMORY_DIR)
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(workspaceSlug) || !getAgentWorkspaceBySlug(workspaceSlug)) {
+    throw new Error('记忆工作区不存在或已失去授权')
+  }
+  const root = resolveAgentWorkspacePath(workspaceSlug)
+  if (!isRegularDirectory(root) || realpathSync(root) !== root) throw new Error('工作区记忆根不可用')
+  return join(root, AUTO_MEMORY_DIR)
 }
 
 export function getWorkspaceAutoMemoryDir(workspaceSlug: string): string {
   const dir = getWorkspaceAutoMemoryPath(workspaceSlug)
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true })
-  } else if (!isRegularDirectory(dir)) {
-    throw new Error(`长期记忆路径不是目录: ${dir}`)
+  try {
+    if (!lstatSync(dir).isDirectory()) throw new Error('长期记忆路径不是普通目录')
+  } catch (error) {
+    if (!error || typeof error !== 'object' || !('code' in error) || error.code !== 'ENOENT') throw error
   }
   return dir
 }
@@ -1559,22 +1471,13 @@ function getWorkspaceInstructionConflict(workspaceSlug: string): WorkspaceMemory
 }
 
 export function getWorkspaceMemorySummary(workspaceSlug: string): WorkspaceMemorySummary {
-  const workspaceRoot = getAgentWorkspacePath(workspaceSlug)
-  const memoryDir = getWorkspaceAutoMemoryPath(workspaceSlug)
-  const legacyDir = join(workspaceRoot, LEGACY_AUTO_MEMORY_DIR)
-  const legacyMigration = existsSync(legacyDir) ? migrateWorkspaceAutoMemoryDirectory(workspaceSlug) : undefined
+  const memoryDir = getWorkspaceAutoMemoryDir(workspaceSlug)
+  const legacyDir = join(dirname(memoryDir), LEGACY_AUTO_MEMORY_DIR)
   const instructionConflict = getWorkspaceInstructionConflict(workspaceSlug)
   return {
     agentsMd: fileSummary(getWorkspaceAgentsMdPath(workspaceSlug)),
     ...(instructionConflict && { instructionConflict }),
-    ...(legacyMigration && {
-      legacyAutoMemory: {
-        directory: legacyDir,
-        conflictingPaths: legacyMigration.conflictingPaths,
-        ...(legacyMigration.issue && { migrationIssue: legacyMigration.issue }),
-        ...(legacyMigration.symbolicLinkPath && { symbolicLinkPath: legacyMigration.symbolicLinkPath }),
-      },
-    }),
+    ...(existsSync(legacyDir) && { legacyAutoMemory: { directory: legacyDir, conflictingPaths: [] } }),
     autoMemory: collectAutoMemorySummary(memoryDir),
   }
 }
@@ -1646,6 +1549,20 @@ export function writeWorkspaceAutoMemoryFile(workspaceSlug: string, relativePath
   const currentContent = existsSync(abs) ? readFileSync(abs, 'utf-8') : ''
   if (expectedContent !== undefined && currentContent !== expectedContent) {
     throw new Error('文件已被外部更新。请刷新后再处理你的修改。')
+  }
+  const workspace = getAgentWorkspaceBySlug(workspaceSlug)
+  const normalized = relative(dir, abs).split(/[\\/]/).join('/')
+  if (workspace && !workspace.projectRootPath && /^(?:[^/]+\/){0,7}[^/]+\.md$/iu.test(normalized)) {
+    const service = new AgentMemoryService()
+    const target = service.resolveTarget({ kind: 'project', workspaceId: workspace.id })
+    const path = normalized.toLowerCase() === 'memory.md' ? 'MEMORY.md' : `memory/${normalized}`
+    const current = service.inspect(target, path)
+    if (expectedContent !== undefined && (current.content ?? '') !== expectedContent) {
+      throw new Error('文件已被外部更新。请刷新后再处理你的修改。')
+    }
+    const result = service.update(target, { source: 'user', permissionMode: 'bypassPermissions' }, current.revision, content, path)
+    if (result.status === 'conflict') throw new Error('文件已被外部更新。请刷新后再处理你的修改。')
+    return
   }
   const byteLen = Buffer.byteLength(content, 'utf-8')
   if (byteLen > SKILL_FILE_SIZE_LIMIT) {
@@ -1980,10 +1897,9 @@ export interface WorkspaceMemoryGuidance {
   needsCollaborationProfile: boolean
 }
 
-export function getWorkspaceMemoryGuidance(workspaceSlug: string): WorkspaceMemoryGuidance {
-  const memoryDir = getWorkspaceAutoMemoryPath(workspaceSlug)
+export function getWorkspaceMemoryGuidance(): WorkspaceMemoryGuidance {
   return {
-    needsCollaborationProfile: !isRegularFile(join(memoryDir, 'user-profile.md')),
+    needsCollaborationProfile: !isRegularFile(join(resolveConfigDir(), 'user_profile.md')),
   }
 }
 

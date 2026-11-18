@@ -29,7 +29,7 @@ import { McpServerForm } from '@/components/settings/McpServerForm'
 import { LocalProjectBadge } from '@/components/agent/LocalProjectBadge'
 import { AgentActionHint } from '@/components/agent/AgentActionHint'
 import { queuedTextToParagraphHtml } from '@/lib/agent-message-queue'
-import type { McpServerEntry, SkillMeta } from '@proma/shared'
+import type { McpServerEntry, SkillMeta, WorkspaceSkillUsage } from '@proma/shared'
 import { useAgentSkillsData } from './useAgentSkillsData'
 import { SkillCard } from './SkillCard'
 import { McpCard } from './McpCard'
@@ -160,6 +160,18 @@ export function AgentSkillsView({
   const [storedTab, setTab] = useAtom(agentSkillsTabAtom)
   // 右侧组件锁定能力域，避免其内部的总览 Tab 与右侧工作区标签产生两套导航。
   const tab = embedded && componentTab ? componentTab : storedTab
+  const [usageSnapshot, setUsageSnapshot] = React.useState<{ slug: string; usage: WorkspaceSkillUsage }>()
+  const usage = usageSnapshot?.slug === data.workspaceSlug ? usageSnapshot?.usage : undefined
+  React.useEffect(() => {
+    if (tab !== 'skills' || !data.hasWorkspace) return
+    let disposed = false
+    const slug = data.workspaceSlug
+    void window.electronAPI.getWorkspaceSkillUsage(slug).then(result => {
+      if (!disposed) setUsageSnapshot({ slug, usage: result })
+    }).catch(error => console.warn('[Skills] 读取实际使用记录失败:', error))
+    return () => { disposed = true }
+  }, [data.hasWorkspace, data.workspaceSlug, tab])
+
   const [search, setSearch] = React.useState('')
   const [selectedSkillSlug, setSelectedSkillSlug] = React.useState<string | null>(null)
   const [selectedSkillWorkspaceSlug, setSelectedSkillWorkspaceSlug] = React.useState<string | null>(null)
@@ -751,6 +763,7 @@ export function AgentSkillsView({
               total={data.skills.length}
               updateCount={updateCount}
               updatingSkill={data.updatingSkill}
+              usage={usage}
               isBuiltin={(slug) => data.defaultSkillSlugs.has(slug)}
               onOpen={selectSkill}
               onToggle={data.toggleSkill}
@@ -853,6 +866,7 @@ interface SkillsTabProps {
   embedded: boolean
   total: number
   updateCount: number
+  usage?: WorkspaceSkillUsage
   updatingSkill: string | null
   isBuiltin: (slug: string) => boolean
   onOpen: (slug: string) => void
@@ -867,6 +881,7 @@ function SkillsTab({
   total,
   updateCount,
   updatingSkill,
+  usage,
   isBuiltin,
   onOpen,
   onToggle,
@@ -881,16 +896,17 @@ function SkillsTab({
 
   return (
     <div className="flex flex-col gap-8">
+      {usage?.partial && <p className="text-xs text-muted-foreground">使用会话数基于可读取的近期记录。</p>}
       {updateCount > 0 && (
         <div className="flex items-center gap-2 rounded-lg border border-blue-500/20 bg-blue-500/[0.06] px-3 py-2 text-[13px] text-blue-600 dark:text-blue-400">
           有 {updateCount} 个 Skill 可更新到来源最新版本
         </div>
       )}
       {customSkills.length > 0 && (
-        <SkillSection title="我的 Skills" skills={customSkills} embedded={embedded} isBuiltin={isBuiltin} updatingSkill={updatingSkill} onOpen={onOpen} onToggle={onToggle} onUpdate={onUpdate} />
+        <SkillSection title="我的 Skills" skills={customSkills} embedded={embedded} isBuiltin={isBuiltin} updatingSkill={updatingSkill} usage={usage} onOpen={onOpen} onToggle={onToggle} onUpdate={onUpdate} />
       )}
       {builtinSkills.length > 0 && (
-        <SkillSection title="PROMA 内置" skills={builtinSkills} embedded={embedded} isBuiltin={isBuiltin} updatingSkill={updatingSkill} onOpen={onOpen} onToggle={onToggle} onUpdate={onUpdate} />
+        <SkillSection title="PROMA 内置" skills={builtinSkills} embedded={embedded} isBuiltin={isBuiltin} updatingSkill={updatingSkill} usage={usage} onOpen={onOpen} onToggle={onToggle} onUpdate={onUpdate} />
       )}
     </div>
   )
@@ -901,13 +917,14 @@ interface SkillSectionProps {
   skills: SkillMeta[]
   embedded: boolean
   isBuiltin: (slug: string) => boolean
+  usage?: WorkspaceSkillUsage
   updatingSkill: string | null
   onOpen: (slug: string) => void
   onToggle: (slug: string, enabled: boolean) => void
   onUpdate: (slug: string) => void
 }
 
-function SkillSection({ title, skills, embedded, isBuiltin, updatingSkill, onOpen, onToggle, onUpdate }: SkillSectionProps): React.ReactElement {
+function SkillSection({ title, skills, embedded, isBuiltin, updatingSkill, usage, onOpen, onToggle, onUpdate }: SkillSectionProps): React.ReactElement {
   const [collapsedGroups, setCollapsedGroups] = React.useState<Set<string>>(new Set())
   const groups = React.useMemo(() => groupSkills(skills), [skills])
 
@@ -948,6 +965,7 @@ function SkillSection({ title, skills, embedded, isBuiltin, updatingSkill, onOpe
                       skill={skill}
                       isBuiltin={isBuiltin(skill.slug)}
                       updating={updatingSkill === skill.slug}
+                      usageCount={usage && Object.hasOwn(usage.sessionsBySlug, skill.slug) ? usage.sessionsBySlug[skill.slug] : undefined}
                       onOpen={() => onOpen(skill.slug)}
                       onToggle={(enabled) => onToggle(skill.slug, enabled)}
                       onUpdate={() => onUpdate(skill.slug)}

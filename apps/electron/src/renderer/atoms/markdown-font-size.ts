@@ -32,25 +32,6 @@ export function applyMarkdownFontSizeToDOM(size: MarkdownFontSize): void {
 }
 
 /**
- * 初始化 Markdown 字号
- *
- * 从主进程加载持久化设置并写入 atom + DOM。
- */
-export async function initializeMarkdownFontSize(
-  setSize: (size: MarkdownFontSize) => void,
-): Promise<void> {
-  try {
-    const settings = await window.electronAPI.getSettings()
-    const size = settings.markdownFontSize ?? DEFAULT_MARKDOWN_FONT_SIZE
-    setSize(size)
-    applyMarkdownFontSizeToDOM(size)
-  } catch (error) {
-    console.error('[Markdown字号] 初始化失败:', error)
-    applyMarkdownFontSizeToDOM(DEFAULT_MARKDOWN_FONT_SIZE)
-  }
-}
-
-/**
  * 更新 Markdown 字号档位并持久化
  */
 export async function updateMarkdownFontSize(size: MarkdownFontSize): Promise<void> {

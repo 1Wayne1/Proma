@@ -84,10 +84,6 @@ export function ChannelSettings(): React.ReactElement {
         setAgentModelId(null)
       }
 
-      await window.electronAPI.updateSettings({
-        ...(agentChannelId === target.id && { agentChannelId: undefined, agentModelId: undefined }),
-      })
-
       await loadChannels()
       setDeleteTarget(null)
     } catch (error) {

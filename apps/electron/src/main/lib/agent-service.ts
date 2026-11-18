@@ -13,7 +13,6 @@
 import { dirname, isAbsolute, join, relative, resolve, sep, win32 } from 'node:path'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { mkdir as mkdirAsync, writeFile as writeFileAsync } from 'node:fs/promises'
-import { BrowserWindow } from 'electron'
 import type { WebContents } from 'electron'
 import type { ToolDefinition } from '@earendil-works/pi-coding-agent'
 import { AGENT_IPC_CHANNELS, MAX_ATTACHMENT_SIZE } from '@proma/shared'
@@ -43,6 +42,7 @@ import { AgentEventBus } from './agent-event-bus'
 import { AgentOrchestrator } from './agent-orchestrator'
 import { getAgentSessionWorkspacePath } from './config-paths'
 import { getAgentWorkspaceBySlug, getProjectFilesPath } from './agent-workspace-manager'
+import { getMainWindow } from './main-window-store'
 import { getLocalProjectRootStatus } from './project-root-health'
 import { getAgentSessionMeta, markAgentSessionDeleting, updateAgentSessionMeta } from './agent-session-manager'
 import { setAgentStopper, setHeadlessAgentRunner } from './agent-headless-runner-registry'
@@ -137,28 +137,18 @@ function getStreamRouteTargets(): Map<string, WebContents> {
 }
 
 export function rebindActiveAgentStreams(webContents: WebContents): AgentActiveSessionSnapshot[] {
+  if (getMainRendererWebContents() !== webContents) return []
   const snapshots = orchestrator.listActiveSessionSnapshots()
   for (const snapshot of snapshots) {
-    streamForwarder.clear(snapshot.sessionId)
-    streamRoutes.rebind(snapshot.sessionId, webContents)
+    if (streamRoutes.get(snapshot.sessionId)?.target === webContents) continue
+    rebindWebContents(snapshot.sessionId, webContents)
   }
-  attachWebContentsCleanup(webContents)
   return snapshots
 }
 
-function isMainRendererWindow(win: BrowserWindow): boolean {
-  if (win.isDestroyed()) return false
-  const url = win.webContents.getURL()
-  if (!url) return false
-  if (url.startsWith('data:')) return false
-  return !url.includes('window=quick-task')
-    && !url.includes('window=voice-dictation')
-    && !url.includes('window=detached-preview')
-}
-
 function getMainRendererWebContents(): WebContents | null {
-  const win = BrowserWindow.getAllWindows().find(isMainRendererWindow)
-  return win && !win.webContents.isDestroyed() ? win.webContents : null
+  const win = getMainWindow()
+  return win && !win.isDestroyed() && !win.webContents.isDestroyed() ? win.webContents : null
 }
 
 const agentQueueCoordinator = new AgentQueueCoordinator({
@@ -592,10 +582,6 @@ export function isAgentSessionActive(sessionId: string): boolean {
 /** 是否存在任意运行中 Agent，供更新器等全局生命周期服务安全判断。 */
 export function hasActiveAgentSessions(): boolean {
   return orchestrator.hasActiveSessions()
-}
-
-export function listActiveAgentSessionSnapshots(): AgentActiveSessionSnapshot[] {
-  return orchestrator.listActiveSessionSnapshots()
 }
 
 export function listQueuedAgentMessages(sessionId: string): AgentQueuedMessageSnapshot[] {

@@ -1,18 +1,14 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import { BellRing, Check, ListTodo, X } from 'lucide-react'
+import { BellRing, CalendarDays, Check, ListTodo, X } from 'lucide-react'
 import { toast } from 'sonner'
 import type { ActivePlanningReminder } from '@proma/shared'
-import { activePlanningRemindersAtom, planningSelectedTodoIdAtom } from '@/atoms/planning-atoms'
+import { activePlanningRemindersAtom, planningSelectedCalendarEventIdAtom, planningSelectedTodoIdAtom } from '@/atoms/planning-atoms'
 import { openWorkspaceComponentAtom } from '@/atoms/agent-atoms'
 import { notificationsEnabledAtom, notificationSoundEnabledAtom, notificationSoundsAtom, playNotificationSoundForType } from '@/atoms/notifications'
 import { Button } from '@/components/ui/button'
 
-function formatTriggerTime(timestamp: number): string {
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
-  }).format(timestamp)
-}
+import { formatReminderTime } from '@/lib/planning-reminder-time'
 
 function mergeReminders(current: ActivePlanningReminder[], incoming: ActivePlanningReminder[]): ActivePlanningReminder[] {
   const items = new Map(current.map((item) => [item.id, item]))
@@ -25,6 +21,7 @@ export function PlanningReminderRail({ playSound = true }: { playSound?: boolean
   const [reminders, setReminders] = useAtom(activePlanningRemindersAtom)
   const openWorkspaceComponent = useSetAtom(openWorkspaceComponentAtom)
   const setSelectedTodoId = useSetAtom(planningSelectedTodoIdAtom)
+  const setSelectedEventId = useSetAtom(planningSelectedCalendarEventIdAtom)
   const notificationsEnabled = useAtomValue(notificationsEnabledAtom)
   const soundEnabled = useAtomValue(notificationSoundEnabledAtom)
   const sounds = useAtomValue(notificationSoundsAtom)
@@ -51,9 +48,9 @@ export function PlanningReminderRail({ playSound = true }: { playSound?: boolean
     return () => { unsubscribeDue(); unsubscribeChanged() }
   }, [load, notificationsEnabled, playSound, setReminders, soundEnabled, sounds])
 
-  const acknowledge = async (id: string) => {
+  const acknowledge = async (reminder: ActivePlanningReminder) => {
     try {
-      await window.electronAPI.acknowledgePlanningReminder(id)
+      await window.electronAPI.acknowledgePlanningReminder(reminder.id, reminder.occurrenceId)
     } catch (error) {
       console.error('[任务/日程] 确认提醒失败:', error)
       toast.error('确认提醒失败')
@@ -67,13 +64,14 @@ export function PlanningReminderRail({ playSound = true }: { playSound?: boolean
       toast.error('完成 Todo 失败')
     }
   }
-  const openTodo = (reminder: ActivePlanningReminder): void => {
-    setSelectedTodoId(reminder.targetId)
+  const openReminderTarget = (reminder: ActivePlanningReminder): void => {
+    if (reminder.targetType === 'todo') setSelectedTodoId(reminder.targetId)
+    else setSelectedEventId(reminder.targetId)
     openWorkspaceComponent(reminder.targetType === 'todo' ? 'todos' : 'calendar')
   }
-  const snooze = async (id: string, minutes: number) => {
+  const snooze = async ({ id, occurrenceId }: ActivePlanningReminder, minutes: number) => {
     try {
-      await window.electronAPI.snoozePlanningReminder({ id, minutes })
+      await window.electronAPI.snoozePlanningReminder({ id, occurrenceId, minutes })
     } catch (error) {
       console.error('[任务/日程] 推迟提醒失败:', error)
       toast.error('推迟提醒失败')
@@ -86,13 +84,13 @@ export function PlanningReminderRail({ playSound = true }: { playSound?: boolean
     <aside className="fixed bottom-4 right-4 z-[100] flex w-[min(380px,calc(100vw-2rem))] flex-col-reverse gap-2" aria-live="polite">
       {reminders.slice(0, 3).map((reminder) => {
         return (
-          <section key={reminder.id} className="bg-background shadow-lg">
+          <section key={reminder.occurrenceId} className="bg-background shadow-lg">
             <div className="flex items-start gap-3 px-3 py-3">
               <BellRing className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" aria-hidden="true" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-start justify-between gap-2">
                   <p className="truncate text-sm font-medium">{reminder.targetTitle}</p>
-                  <span className="shrink-0 text-xs text-muted-foreground">{formatTriggerTime(reminder.snoozedUntil ?? reminder.triggerAt)}</span>
+                  <span className="shrink-0 text-xs text-muted-foreground">{formatReminderTime(reminder.snoozedUntil ?? reminder.triggerAt)}</span>
                 </div>
                 <div className="mt-1 flex flex-wrap gap-1.5 text-xs text-muted-foreground">
                   <span>{reminder.targetType === 'todo' ? 'Todo' : '日程'}</span>
@@ -100,14 +98,14 @@ export function PlanningReminderRail({ playSound = true }: { playSound?: boolean
                   {reminder.tags.map((tag) => <span key={tag.id}>#{tag.name}</span>)}
                 </div>
               </div>
-              <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => void acknowledge(reminder.id)} aria-label="关闭提醒" title="关闭提醒">
+              <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => void acknowledge(reminder)} aria-label="关闭提醒" title="关闭提醒">
                 <X className="h-4 w-4" />
               </Button>
             </div>
             <div className="flex flex-wrap items-center gap-1 bg-muted/20 px-3 py-2">
               {reminder.targetType === 'todo' && (
                 <>
-                  <Button variant="secondary" size="sm" className="h-7" onClick={() => openTodo(reminder)}>
+                  <Button variant="secondary" size="sm" className="h-7" onClick={() => openReminderTarget(reminder)}>
                     <ListTodo className="mr-1 h-3.5 w-3.5" />查看 Todo
                   </Button>
                   <Button variant="secondary" size="sm" className="h-7" onClick={() => void completeTodo(reminder)}>
@@ -115,8 +113,13 @@ export function PlanningReminderRail({ playSound = true }: { playSound?: boolean
                   </Button>
                 </>
               )}
+              {reminder.targetType === 'calendar_event' && (
+                <Button variant="secondary" size="sm" className="h-7" onClick={() => openReminderTarget(reminder)}>
+                  <CalendarDays className="mr-1 size-3.5" />查看日程
+                </Button>
+              )}
               {[5, 10, 30, 60].map((minutes) => (
-                <Button key={minutes} variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => void snooze(reminder.id, minutes)}>
+                <Button key={minutes} variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => void snooze(reminder, minutes)}>
                   {minutes} 分钟
                 </Button>
               ))}

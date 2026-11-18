@@ -26,11 +26,12 @@ import type {
   AgentToolCallDelta,
   SDKUserMessageInput,
   SkillActivation,
+  CodexSpeed,
 } from '@proma/shared'
 import {
   calculatePiAutoCompactionReserveTokens,
   inferReasoningTransport,
-  isCodexFastModeSupportedModel,
+  resolveCodexSpeed,
   resolveReasoningProfile,
   createSkillActivationFromPath,
 } from '@proma/shared'
@@ -61,7 +62,7 @@ import {
 } from './pi-resource-loader-overrides'
 import { ProjectInstructionScopeController } from './pi-project-instruction-scope'
 import type { ProjectInstructionSource } from '../project-instruction-resolver'
-import { createCodexFastModeExtension, withCodexFastModeServiceTier } from './pi-codex-request-settings'
+import { createCodexSpeedExtension, withCodexSpeedServiceTier } from './pi-codex-request-settings'
 import { createDeepSeekReasoningRequestExtension } from './pi-deepseek-reasoning-request-settings'
 import { createOpenAIReasoningRequestExtension } from './pi-openai-reasoning-request-settings'
 import { mergeRuntimeEnv, type AgentRuntimeEnv } from '../agent-runtime-env'
@@ -171,7 +172,7 @@ export interface PiAgentQueryOptions extends AgentQueryInput {
   /** 手动压缩请求：走 pi 原生 session.compact()，而非把 /compact 当普通 prompt 发给模型 */
   compactRequest?: boolean
   /** ChatGPT Codex Fast Mode；仅 openai-codex 的受支持模型实际注入 priority service tier。 */
-  codexFastMode?: boolean
+  codexSpeed?: CodexSpeed
   /** Pi 的 OAuth credential store 使用真实 expires 和 refresh，不读取 ~/.pi。 */
   codexOAuthCredentials?: CodexOAuthCredentials
   /** Pi 运行中刷新 OAuth 后，将新凭据回写到 Proma 渠道存储。 */
@@ -1420,7 +1421,8 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         httpIdleTimeoutMs: input.httpIdleTimeoutMs,
       })
       const sdk = await import('@earendil-works/pi-coding-agent')
-      const piAi = input.codexFastMode && input.provider === 'openai-codex'
+      const codexSpeed = input.provider === 'openai-codex' ? resolveCodexSpeed(input, input.model) : 'standard'
+      const piAi = codexSpeed !== 'standard'
         ? await import('@earendil-works/pi-ai/compat')
         : undefined
       if (active.abortRequested) throw createAbortError()
@@ -1510,8 +1512,8 @@ export class PiAgentAdapter implements AgentProviderAdapter {
               thinkingLevel: input.thinkingLevel,
             })]
           : []),
-        ...(input.provider === 'openai-codex' && input.codexFastMode
-          ? [createCodexFastModeExtension({ fastMode: true })]
+        ...(codexSpeed !== 'standard'
+          ? [createCodexSpeedExtension(codexSpeed)]
           : []),
       ]
       const resourceLoader = new sdk.DefaultResourceLoader({
@@ -1554,9 +1556,9 @@ export class PiAgentAdapter implements AgentProviderAdapter {
         await previousTransformContext?.(messages, signal) ?? messages,
       )
       // Pi 0.86 的 transcript-aware before_agent_start extension 会在下一轮注入动态项目指令。
-      if (piAi && input.codexFastMode && input.provider === 'openai-codex' && isCodexFastModeSupportedModel(input.model)) {
+      if (piAi && codexSpeed !== 'standard') {
         // Pi 的通用 streamSimple 会丢弃 provider 专属 serviceTier；这里直接走
-        // provider stream，确保 request body 与 usage.cost 都使用 priority tier。
+        // provider stream，确保 request body 与 usage.cost 使用模型支持的档位。
         session.agent.streamFunction = async (requestModel, context, options) => {
           const authResult = await modelRuntime.getAuth(requestModel)
           if (!authResult?.auth.apiKey) throw new Error('无法获取 ChatGPT (Codex) OAuth access token')
@@ -1568,7 +1570,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
           const timeoutMs = options?.timeoutMs ?? retrySettings.timeoutMs ?? (configuredTimeoutMs === 0 ? 2_147_483_647 : configuredTimeoutMs)
           const websocketConnectTimeoutMs = options?.websocketConnectTimeoutMs ?? settingsManager.getWebSocketConnectTimeoutMs()
 
-          return piAi.stream(requestModel, context, withCodexFastModeServiceTier({
+          return piAi.stream(requestModel, context, withCodexSpeedServiceTier({
             ...options,
             apiKey: auth.apiKey,
             env,
@@ -1577,7 +1579,7 @@ export class PiAgentAdapter implements AgentProviderAdapter {
             maxRetries: options?.maxRetries ?? retrySettings.maxRetries,
             maxRetryDelayMs: options?.maxRetryDelayMs ?? retrySettings.maxRetryDelayMs,
             headers: { ...auth.headers, ...options?.headers },
-          }))
+          }, codexSpeed))
         }
       }
       // 代理作用域必须只覆盖模型 provider stream：在整个 session.prompt() 链上设

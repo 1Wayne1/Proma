@@ -42,8 +42,7 @@ const ARCHIVED_UNASSIGNED_GROUP_ID = '__archived-unassigned__'
 /**
  * 将归档会话按所属项目组织，保留自动任务和遗留无归属会话的独立入口。
  *
- * 只输出非空分组：真实项目顺序跟随当前工作区顺序，自动任务与未归属项目
- * 固定置后，避免历史会话被误归入默认项目。
+ * 已归档项目仍保留其中的会话和恢复入口，包括空项目。独立归档的会话沿用原分组。
  */
 export function groupArchivedAgentSessionsByProject({
   sessions,
@@ -59,9 +58,12 @@ export function groupArchivedAgentSessionsByProject({
   )
   const automationSessions: AgentSessionMeta[] = []
   const unassignedSessions: AgentSessionMeta[] = []
+  const archivedWorkspaceIds = new Set(workspaces.filter(workspace => workspace.archived).map(workspace => workspace.id))
 
   for (const session of sessions) {
-    if (!session.archived || session.isDraft || excludedSessionIds.has(session.id)) continue
+    if (session.isDraft || excludedSessionIds.has(session.id)) continue
+    const inArchivedWorkspace = session.workspaceId !== undefined && archivedWorkspaceIds.has(session.workspaceId)
+    if (!session.archived && !inArchivedWorkspace) continue
     if (session.sourceAutomationId) {
       automationSessions.push(session)
       continue
@@ -80,7 +82,7 @@ export function groupArchivedAgentSessionsByProject({
   const groups: ArchivedAgentSessionProjectGroup[] = []
   for (const workspace of workspaces) {
     const workspaceSessions = sessionsByWorkspaceId.get(workspace.id) ?? []
-    if (workspaceSessions.length === 0) continue
+    if (workspaceSessions.length === 0 && !workspace.archived) continue
     groups.push({
       id: workspace.id,
       label: workspace.name,

@@ -237,6 +237,8 @@ interface DiffTabContentProps {
   previewOnly?: boolean
   /** 禁用预览内编辑，适用于 clipboard 等临时快照 */
   readOnly?: boolean
+  /** 交付窗口的文件操作由受限交付入口处理。 */
+  presentation?: boolean
   /** 候选基础目录（previewOnly 模式下用于路径解析） */
   basePaths?: string[]
   /** 仅可信 UI 主动选择的文件允许超出会话授权根。 */
@@ -253,7 +255,7 @@ interface DiffTabContentProps {
   baseRef?: string
 }
 
-export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewOnly, readOnly, basePaths, unrestricted, workspaceSkillSlug, legacySkillFilePath, onEmptyDiff, toolbarActions, baseRef }: DiffTabContentProps): React.ReactElement {
+export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewOnly, readOnly, presentation, basePaths, unrestricted, workspaceSkillSlug, legacySkillFilePath, onEmptyDiff, toolbarActions, baseRef }: DiffTabContentProps): React.ReactElement {
   const ext = getExtension(filePath)
   const isMarkdown = previewOnly && MD_EXTS.has(ext)
   const isHtml = previewOnly && HTML_EXTS.has(ext)
@@ -1650,7 +1652,7 @@ export function DiffTabContent({ filePath, dirPath, sessionId, gitRoot, previewO
           {getPreviewPathLabel(filePath)}
         </span>
 
-        {previewOnly && (
+        {previewOnly && !presentation && (
           <>
             <DefaultAppOpenButton
               filePath={previewTargetPath}

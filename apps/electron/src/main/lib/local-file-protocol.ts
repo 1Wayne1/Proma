@@ -8,7 +8,8 @@
 
 import { randomUUID } from 'node:crypto'
 import { existsSync, realpathSync, statSync } from 'node:fs'
-import { resolve, sep } from 'node:path'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
+import { turnPathKey } from './turn-changes/paths'
 import { pathToFileURL } from 'node:url'
 import { net } from 'electron'
 
@@ -16,6 +17,8 @@ type RegisteredEntry = {
   root: string
   isDirectory: boolean
   createdAt: number
+  scope?: object
+  validate?: () => void
 }
 
 const registeredEntries = new Map<string, RegisteredEntry>()
@@ -46,10 +49,16 @@ function realpathExisting(path: string): string {
 }
 
 function isInsideDirectory(target: string, root: string): boolean {
-  return target === root || target.startsWith(root.endsWith(sep) ? root : root + sep)
+  const rel = relative(turnPathKey(root), turnPathKey(target))
+  return rel === '' || (!isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${sep}`))
 }
 
-function registerEntry(path: string, isDirectory: boolean): string {
+interface LocalFileGrant {
+  scope?: object
+  validate?: () => void
+}
+
+function registerEntry(path: string, isDirectory: boolean, grant: LocalFileGrant): string {
   pruneEntries()
   const root = realpathExisting(path)
   const st = statSync(root)
@@ -61,19 +70,23 @@ function registerEntry(path: string, isDirectory: boolean): string {
   }
 
   const token = randomUUID()
-  registeredEntries.set(token, { root, isDirectory, createdAt: Date.now() })
+  registeredEntries.set(token, { root, isDirectory, createdAt: Date.now(), ...grant })
   return `proma-file://${token}`
 }
 
-export function registerPromaFilePath(path: string): string {
-  return registerEntry(path, false)
+export function registerPromaFilePath(path: string, grant: LocalFileGrant = {}): string {
+  return registerEntry(path, false, grant)
 }
 
-export function registerPromaDirectoryPath(path: string): string {
-  return registerEntry(path, true)
+export function registerPromaDirectoryPath(path: string, grant: LocalFileGrant = {}): string {
+  return registerEntry(path, true, grant)
 }
 
-export function handlePromaFileRequest(request: Request): Promise<Response> | Response {
+export function revokePromaFileUrl(url: string): void {
+  registeredEntries.delete(new URL(url).hostname)
+}
+
+export function handlePromaFileRequest(request: Request, scope?: object): Promise<Response> | Response {
   let url: URL
   try {
     url = new URL(request.url)
@@ -83,24 +96,23 @@ export function handlePromaFileRequest(request: Request): Promise<Response> | Re
 
   const token = url.hostname
   const entry = registeredEntries.get(token)
-  if (!entry) {
+  if (!entry || (entry.scope !== undefined && entry.scope !== scope) || Date.now() - entry.createdAt > ENTRY_TTL_MS) {
     return new Response('Not Found', { status: 404 })
   }
 
   let target = entry.root
-  if (entry.isDirectory) {
-    const relativePath = decodeURIComponent(url.pathname.replace(/^\/+/, ''))
-    try {
+  try {
+    entry.validate?.()
+    if (turnPathKey(realpathSync(entry.root)) !== turnPathKey(entry.root)) return new Response('Forbidden', { status: 403 })
+    if (entry.isDirectory) {
+      const relativePath = decodeURIComponent(url.pathname.replace(/^\/+/, ''))
       target = realpathSync(resolve(entry.root, relativePath))
-    } catch {
-      return new Response('Not Found', { status: 404 })
-    }
-    if (!isInsideDirectory(target, entry.root)) {
-      return new Response('Forbidden', { status: 403 })
-    }
-  } else if (url.pathname && url.pathname !== '/') {
+      if (!isInsideDirectory(target, entry.root)) return new Response('Forbidden', { status: 403 })
+    } else if (url.pathname && url.pathname !== '/') return new Response('Not Found', { status: 404 })
+    if (!statSync(target).isFile()) return new Response('Not Found', { status: 404 })
+    entry.validate?.()
+  } catch {
     return new Response('Not Found', { status: 404 })
   }
-
   return net.fetch(pathToFileURL(target).toString())
 }

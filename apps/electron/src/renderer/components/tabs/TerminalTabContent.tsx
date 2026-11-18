@@ -25,6 +25,7 @@ export interface TerminalTabContentProps {
   terminalId: string
   sessionId: string
   cwd?: string
+  agentOwned?: boolean
   /** 右侧工作区切换 Agent 时由所属 Tab 的关闭动作统一终止 PTY。 */
   terminateOnUnmount?: boolean
 }
@@ -33,7 +34,7 @@ export interface TerminalTabContentProps {
  * 每个 Terminal Tab 保有自己的 xterm 实例和滚动缓冲。父层仅切换 CSS visibility，
  * 因此切 Tab 不会销毁 PTY 或终端屏幕。
  */
-export function TerminalTabContent({ terminalId, sessionId, cwd, terminateOnUnmount = true }: TerminalTabContentProps): React.ReactElement {
+export function TerminalTabContent({ terminalId, sessionId, cwd, agentOwned, terminateOnUnmount = true }: TerminalTabContentProps): React.ReactElement {
   const hostRef = React.useRef<HTMLDivElement>(null)
   const terminalRef = React.useRef<Terminal>()
   const fitAddonRef = React.useRef<FitAddon>()
@@ -94,6 +95,7 @@ export function TerminalTabContent({ terminalId, sessionId, cwd, terminateOnUnmo
 
     let disposed = false
     let restoring = true
+    let exitCode: number | undefined
     let lastRenderedSequence = 0
     const pendingOutput: TerminalOutputEvent[] = []
     const acknowledge = (sequence: number): void => {
@@ -116,6 +118,7 @@ export function TerminalTabContent({ terminalId, sessionId, cwd, terminateOnUnmo
     }
 
     const disposeInput = terminal.onData((data) => {
+      if (!ptyCreated) return
       void window.electronAPI.writeTerminal({ terminalId, data }).catch(console.error)
     })
     const disposeOutput = window.electronAPI.onTerminalOutput((event) => {
@@ -123,8 +126,14 @@ export function TerminalTabContent({ terminalId, sessionId, cwd, terminateOnUnmo
       if (restoring) pendingOutput.push(event)
       else renderOutput(event)
     })
+    const renderExit = (code: number): void => {
+      ptyCreated = false
+      terminal.write(`\r\n\x1b[90m终端已退出（${code}）\x1b[0m\r\n`)
+    }
     const disposeExit = window.electronAPI.onTerminalExit((event) => {
-      if (event.terminalId === terminalId) terminal.write(`\r\n\x1b[90m终端已退出（${event.exitCode}）\x1b[0m\r\n`)
+      if (event.terminalId !== terminalId) return
+      if (restoring) exitCode = event.exitCode
+      else renderExit(event.exitCode)
     })
 
     let creation: Promise<unknown> | undefined
@@ -133,24 +142,31 @@ export function TerminalTabContent({ terminalId, sessionId, cwd, terminateOnUnmo
         const initialCols = Math.max(terminal.cols, 1)
         const initialRows = Math.max(terminal.rows, 1)
         lastPtyDimensionsRef.current = { cols: initialCols, rows: initialRows }
-        creation = window.electronAPI.createTerminal({
-          terminalId,
-          sessionId,
-          cwd,
-          cols: initialCols,
-          rows: initialRows,
-        })
-        await creation
+        if (agentOwned) {
+          await window.electronAPI.retainAgentTerminal(sessionId, terminalId)
+        } else {
+          creation = window.electronAPI.createTerminal({
+            terminalId,
+            sessionId,
+            cwd,
+            cols: initialCols,
+            rows: initialRows,
+          })
+          await creation
+        }
         if (disposed) return
-        ptyCreated = true
-        fit()
         const snapshot = await window.electronAPI.getTerminalSnapshot(terminalId)
+        if (disposed) return
+        ptyCreated = snapshot.exitCode === undefined && exitCode === undefined
+        fit()
         terminal.write(snapshot.output, () => {
           if (disposed) return
           lastRenderedSequence = snapshot.sequence
           acknowledge(snapshot.sequence)
           restoring = false
           flushPendingOutput()
+          const terminalExit = snapshot.exitCode ?? exitCode
+          if (terminalExit !== undefined) renderExit(terminalExit)
           terminal.focus()
         })
       } catch (error) {
@@ -182,7 +198,7 @@ export function TerminalTabContent({ terminalId, sessionId, cwd, terminateOnUnmo
         else killIfStillUnmounted()
       }
     }
-  }, [cwd, sessionId, terminalId, terminateOnUnmount])
+  }, [agentOwned, cwd, sessionId, terminalId, terminateOnUnmount])
 
   return (
     <div className="h-full w-full overflow-hidden bg-[#111113] p-2">

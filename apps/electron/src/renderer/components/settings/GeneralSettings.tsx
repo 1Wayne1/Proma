@@ -24,6 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../ui/select'
+import { AgentMemoryDialog } from '../agent-skills/AgentMemoryDialog'
 import { UserAvatar } from '../chat/UserAvatar'
 import { userProfileAtom } from '@/atoms/user-profile'
 import {
@@ -281,6 +282,7 @@ export function GeneralSettings(): React.ReactElement {
             </div>
           </div>
         </SettingsCard>
+        <div className="mt-2"><AgentMemoryDialog scope={{ kind: 'global' }} /></div>
       </SettingsSection>
 
       {/* 通用设置 */}

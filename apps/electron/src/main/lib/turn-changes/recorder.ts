@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import type { TurnChangeLimits, TurnChangeLimitation, TurnChangeOwner, TurnChangeRecord, TurnFileChange, TurnFileSnapshot } from '@proma/shared'
+import { canonicalProjectPath } from '../project-mutation-guard'
 import { captureTurnFile, collectTurnLimitations, validateTurnLimits } from './capture'
 import type { CapturedTurnFile, TurnCaptureBudget } from './capture'
 import { compareTurnFile } from './compare'
@@ -58,7 +59,8 @@ export class TurnChangeRecorder {
     const id = randomUUID()
     try {
       const cwd = await canonicalTurnRoot(requestedCwd)
-      if (isWithinTurnRoot(cwd, this.storageRoot)) throw new Error('逐轮私有快照必须存储在项目之外')
+      const storageRoot = canonicalProjectPath(this.storageRoot)
+      if (isWithinTurnRoot(turnPathKey(cwd), turnPathKey(storageRoot))) throw new Error('逐轮私有快照必须存储在项目之外')
       const controlledPaths = requestedPaths.map(normalizeTurnPath)
       const controlled = new Set(controlledPaths.map(turnPathKey))
       const git = await discoverTurnGitFiles(cwd, this.limits, signal)

@@ -111,8 +111,10 @@ export function collapseRightWorkspaceSplit(split: RightWorkspaceSplitState): Ag
 export function sanitizeRightWorkspaceSplit(
   split: RightWorkspaceSplitState,
   availableTabs: ReadonlySet<AgentSidePanelTab>,
+  requestedTab: AgentSidePanelTab,
   fallbackTab: AgentSidePanelTab = 'files',
 ): RightWorkspaceSplitResolution {
+  if (availableTabs.has(requestedTab)) split = selectRightWorkspaceSplitTab(split, requestedTab)
   const available = [...availableTabs]
   const hasLeft = availableTabs.has(split.leftTab)
   const hasRight = availableTabs.has(split.rightTab)

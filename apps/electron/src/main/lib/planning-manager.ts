@@ -60,6 +60,7 @@ type GroupRow = { id: string; name: string; color: string | null; sort_order: nu
 type TagRow = { id: string; name: string; color: string | null; created_at: number; updated_at: number }
 type ReminderRow = {
   id: string; target_type: PlanningReminderTargetType; target_id: string; trigger_at: number; snoozed_until: number | null
+  occurrence_revision: number
   status: 'pending' | 'acknowledged' | 'completed'; origin: PlanningReminderOrigin; acknowledged_at: number | null; last_notified_at: number | null; created_at: number; updated_at: number
 }
 type TodoSessionLinkRow = { todo_id: string; session_id: string; first_touched_at: number; last_touched_at: number }
@@ -142,7 +143,7 @@ function withPlanningTransaction<T>(work: () => T): T {
   }
 }
 
-const PLANNING_SCHEMA_VERSION = 9
+const PLANNING_SCHEMA_VERSION = 10
 
 /** EventKit 的内部 locator、marker 与 lastModifiedDate 不属于用户可编辑内容，不能参与双向基线。 */
 export function planningNativeCalendarHash(item: Pick<PlanningNativeExternalItem, 'title' | 'notes' | 'startAt' | 'endAt' | 'allDay'>): string {
@@ -377,6 +378,9 @@ function migrateDatabase(db: SqliteDatabase): void {
       `)
       version = 9
     }
+    if (version < 10) {
+      db.exec('ALTER TABLE planning_reminders ADD COLUMN occurrence_revision INTEGER NOT NULL DEFAULT 0; PRAGMA user_version = 10')
+    }
     db.exec('COMMIT')
   } catch (error) {
     try { db.exec('ROLLBACK') } catch { /* migration transaction already rolled back */ }
@@ -418,7 +422,7 @@ function tagFromRow(row: TagRow): PlanningTag {
   return { id: row.id, name: row.name, color: row.color ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at }
 }
 function reminderFromRow(row: ReminderRow): PlanningReminder {
-  return { id: row.id, targetType: row.target_type, targetId: row.target_id, triggerAt: row.trigger_at, snoozedUntil: row.snoozed_until ?? undefined, status: row.status, origin: row.origin ?? 'manual', acknowledgedAt: row.acknowledged_at ?? undefined, lastNotifiedAt: row.last_notified_at ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at }
+  return { id: row.id, occurrenceId: `${row.id}:${row.occurrence_revision}`, targetType: row.target_type, targetId: row.target_id, triggerAt: row.trigger_at, snoozedUntil: row.snoozed_until ?? undefined, status: row.status, origin: row.origin ?? 'manual', acknowledgedAt: row.acknowledged_at ?? undefined, lastNotifiedAt: row.last_notified_at ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at }
 }
 function getPlanningGroup(id: string | null, scope: PlanningGroupScope): PlanningGroup | undefined {
   if (!id) return undefined
@@ -571,7 +575,7 @@ function syncTodoDueAtReminder(todoId: string, dueAt: number | undefined, now: n
   }
   const movable = defaults.find((reminder) => reminder.status === 'pending' && reminder.snoozedUntil === undefined)
   if (movable) {
-    db.prepare(`UPDATE planning_reminders SET trigger_at=:triggerAt,last_notified_at=NULL,updated_at=:now WHERE id=:id AND status='pending'`).run({ id: movable.id, triggerAt: dueAt, now })
+    db.prepare(`UPDATE planning_reminders SET trigger_at=:triggerAt,occurrence_revision=occurrence_revision+1,last_notified_at=NULL,updated_at=:now WHERE id=:id AND status='pending' AND trigger_at<>:triggerAt`).run({ id: movable.id, triggerAt: dueAt, now })
     return
   }
   // 已推迟的默认提醒保持原样；存在任意手动待处理提醒时也不额外创建默认提醒。
@@ -1313,8 +1317,12 @@ export function deleteCalendarEvent(id: string): boolean {
 }
 
 function createPlanningReminderWithOrigin(input: CreatePlanningReminderRequest, origin: PlanningReminderOrigin): PlanningReminder {
-  assertTimestamp(input.triggerAt, 'triggerAt'); if (input.targetType === 'todo' ? !getTodo(input.targetId) : !getCalendarEvent(input.targetId)) throw new Error('提醒目标不存在')
-  const now = Date.now(); const reminder: PlanningReminder = { id: randomUUID(), targetType: input.targetType, targetId: input.targetId, triggerAt: input.triggerAt, status: 'pending', origin, createdAt: now, updatedAt: now }
+  assertTimestamp(input.triggerAt, 'triggerAt')
+  if (!Number.isSafeInteger(input.triggerAt) || input.triggerAt > 8_640_000_000_000_000) throw new Error('提醒时间无效')
+  if (input.targetType === 'todo' ? getTodo(input.targetId)?.status !== 'open' : !getCalendarEvent(input.targetId)) throw new Error('提醒目标不存在或已完成')
+  const now = Date.now()
+  const id = randomUUID()
+  const reminder: PlanningReminder = { id, occurrenceId: `${id}:0`, targetType: input.targetType, targetId: input.targetId, triggerAt: input.triggerAt, status: 'pending', origin, createdAt: now, updatedAt: now }
   getDatabase().prepare(`INSERT INTO planning_reminders (id,target_type,target_id,trigger_at,status,origin,created_at,updated_at) VALUES (:id,:targetType,:targetId,:triggerAt,:status,:origin,:createdAt,:updatedAt)`).run({ id: reminder.id, targetType: reminder.targetType, targetId: reminder.targetId, triggerAt: reminder.triggerAt, status: reminder.status, origin: reminder.origin, createdAt: reminder.createdAt, updatedAt: reminder.updatedAt })
   return reminder
 }
@@ -1323,22 +1331,38 @@ function createPlanningReminderWithOrigin(input: CreatePlanningReminderRequest, 
 export function createPlanningReminder(input: CreatePlanningReminderRequest): PlanningReminder {
   return createPlanningReminderWithOrigin(input, 'manual')
 }
-export function deletePlanningReminder(id: string): boolean { const result = getDatabase().prepare('DELETE FROM planning_reminders WHERE id=:id').run({ id }) as { changes?: number }; return (result.changes ?? 0) > 0 }
-export function updatePlanningReminder(id: string, triggerAt: number): PlanningReminder | undefined {
+function assertPlanningOccurrence(id: string, occurrenceId?: string): PlanningReminder | undefined {
+  const reminder = getReminder(id)
+  if (reminder && occurrenceId !== undefined && reminder.occurrenceId !== occurrenceId) throw new Error('提醒已在其他窗口改期，请刷新后重试')
+  return reminder
+}
+
+export function deletePlanningReminder(id: string, occurrenceId?: string): boolean {
+  if (!assertPlanningOccurrence(id, occurrenceId)) return false
+  const result = getDatabase().prepare('DELETE FROM planning_reminders WHERE id=:id').run({ id }) as { changes?: number }
+  return (result.changes ?? 0) > 0
+}
+export function updatePlanningReminder(id: string, triggerAt: number, occurrenceId?: string): PlanningReminder | undefined {
   assertTimestamp(triggerAt, 'triggerAt')
+  if (!Number.isSafeInteger(triggerAt) || triggerAt > 8_640_000_000_000_000) throw new Error('提醒时间无效')
+  const reminder = assertPlanningOccurrence(id, occurrenceId)
+  if (!reminder || reminder.status !== 'pending') return
+  if (reminder.triggerAt === triggerAt && reminder.snoozedUntil === undefined) return reminder
   const now = Date.now()
-  const result = getDatabase().prepare(`UPDATE planning_reminders SET trigger_at=:triggerAt,snoozed_until=NULL,last_notified_at=NULL,origin='manual',updated_at=:now WHERE id=:id AND status='pending'`).run({ id, triggerAt, now }) as { changes?: number }
+  const result = getDatabase().prepare(`UPDATE planning_reminders SET trigger_at=:triggerAt,snoozed_until=NULL,occurrence_revision=occurrence_revision+1,last_notified_at=NULL,origin='manual',updated_at=:now WHERE id=:id AND status='pending'`).run({ id, triggerAt, now }) as { changes?: number }
   return (result.changes ?? 0) > 0 ? getReminder(id) : undefined
 }
-export function acknowledgePlanningReminder(id: string): PlanningReminder | undefined {
+export function acknowledgePlanningReminder(id: string, occurrenceId?: string): PlanningReminder | undefined {
+  if (occurrenceId !== undefined && !assertPlanningOccurrence(id, occurrenceId)) return
   const now = Date.now()
   const result = getDatabase().prepare(`UPDATE planning_reminders SET status='acknowledged',acknowledged_at=:now,updated_at=:now WHERE id=:id AND status='pending'`).run({ id, now }) as { changes?: number }
   return (result.changes ?? 0) > 0 ? getReminder(id) : undefined
 }
-export function snoozePlanningReminder(id: string, minutes: number): PlanningReminder | undefined {
+export function snoozePlanningReminder(id: string, minutes: number, occurrenceId?: string): PlanningReminder | undefined {
   if (!Number.isInteger(minutes) || minutes < 1 || minutes > 10080) throw new Error('推迟分钟数必须在 1 到 10080 之间')
+  if (occurrenceId !== undefined && !assertPlanningOccurrence(id, occurrenceId)) return
   const now = Date.now()
-  const result = getDatabase().prepare(`UPDATE planning_reminders SET snoozed_until=:snoozedUntil,last_notified_at=NULL,origin='manual',updated_at=:now WHERE id=:id AND status='pending'`).run({ id, snoozedUntil: now + minutes * 60_000, now }) as { changes?: number }
+  const result = getDatabase().prepare(`UPDATE planning_reminders SET snoozed_until=:snoozedUntil,occurrence_revision=occurrence_revision+1,last_notified_at=NULL,origin='manual',updated_at=:now WHERE id=:id AND status='pending'`).run({ id, snoozedUntil: now + minutes * 60_000, now }) as { changes?: number }
   return (result.changes ?? 0) > 0 ? getReminder(id) : undefined
 }
 function getReminder(id: string): PlanningReminder | undefined { const row = getDatabase().prepare('SELECT * FROM planning_reminders WHERE id=:id').get({ id }) as ReminderRow | undefined; return row ? reminderFromRow(row) : undefined }
@@ -1350,6 +1374,10 @@ export function listActivePlanningReminders(): ActivePlanningReminder[] {
 }
 /** 返回新增到期提醒并标记已通知，避免每个 30 秒轮询周期重复播放声音。 */
 export function claimDuePlanningReminders(now = Date.now()): ActivePlanningReminder[] {
+  return withPlanningTransaction(() => claimDueReminders(now))
+}
+
+function claimDueReminders(now: number): ActivePlanningReminder[] {
   // Todo 已成功发布到受管 Reminders List 时，让系统 Reminder 成为默认截止提醒的唯一系统通知来源，避免双弹窗。
   const rows = getDatabase().prepare(`
     SELECT * FROM planning_reminders
@@ -1361,7 +1389,7 @@ export function claimDuePlanningReminders(now = Date.now()): ActivePlanningRemin
           WHERE profiles.entity='reminder' AND profiles.enabled=1
         )
       )
-    ORDER BY COALESCE(snoozed_until,trigger_at)
+    ORDER BY COALESCE(snoozed_until,trigger_at), id
   `).all({ now }) as ReminderRow[]
   const result: ActivePlanningReminder[] = []
   for (const row of rows) { getDatabase().prepare('UPDATE planning_reminders SET last_notified_at=:now,updated_at=:now WHERE id=:id').run({ id: row.id, now }); const target = row.target_type === 'todo' ? getTodo(row.target_id) : getCalendarEvent(row.target_id); if (target) result.push({ ...reminderFromRow({ ...row, last_notified_at: now, updated_at: now }), targetTitle: target.title, group: target.group, tags: target.tags }) }

@@ -23,12 +23,14 @@ const GLOBAL_SHORTCUT_DEFAULTS: Record<string, { mac: string; win: string }> = {
   'quick-task': { mac: 'Alt+Space', win: 'Alt+Space' },
   'show-main-window': { mac: 'CommandOrControl+Shift+P', win: 'CommandOrControl+Shift+P' },
   'voice-dictation': { mac: 'Ctrl+`', win: 'Ctrl+`' },
+  'quick-capture-todo': { mac: 'CommandOrControl+Shift+T', win: 'CommandOrControl+Shift+T' },
 }
 
 const isMac = process.platform === 'darwin'
 const VOICE_DICTATION_SHORTCUT_ID = 'voice-dictation'
 
 function shouldRegisterGlobalShortcut(id: string): boolean {
+  if (id === 'quick-capture-todo') return getSettings().productivityTools.todosEnabled
   if (id !== VOICE_DICTATION_SHORTCUT_ID) return true
   return getSettings().voiceDictation?.enabled === true
 }

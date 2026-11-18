@@ -135,6 +135,7 @@ function getReadPath(input: Record<string, unknown>): string | null {
 export interface SkillActivationCollectionOptions {
   workspaceSlug?: string
   workspaceSkillsRoot?: string
+  includeActivation?: (activation: SkillActivation) => boolean
 }
 
 function isWorkspaceSkillEntryPath(path: string, options?: SkillActivationCollectionOptions): boolean {
@@ -171,7 +172,7 @@ export function collectSuccessfulSkillReadActivations(
           undefined,
           isWorkspaceSkillEntryPath(path, options) ? options?.workspaceSlug : undefined,
         )
-        if (activation) pendingReads.set(tool.id, activation)
+        if (activation && (options?.includeActivation?.(activation) ?? true)) pendingReads.set(tool.id, activation)
       }
       continue
     }
@@ -214,8 +215,8 @@ export function collectSkillActivations(
     message.type === 'result' ? getStoredActivations(message as SDKResultMessage) : []
   ))
   return mergeSkillActivations(
-    inputStored,
-    inputStored.length > 0 ? [] : resultStored,
+    inputStored.filter(activation => options?.includeActivation?.(activation) ?? true),
+    inputStored.length > 0 ? [] : resultStored.filter(activation => options?.includeActivation?.(activation) ?? true),
     collectSuccessfulSkillReadActivations(messages, options),
   )
 }

@@ -16,6 +16,7 @@ import { TodoDatePicker, isTodoDateOnly } from '@/components/ui/todo-date-picker
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { PlanningFloatingInspector } from '@/components/planning/PlanningFloatingInspector'
+import { PlanningReminderEditor } from './PlanningReminderEditor'
 import { PlanningGroupManager } from '@/components/planning/PlanningGroupManager'
 import { PlanningNativeSyncControl } from '@/components/planning/PlanningNativeSyncControl'
 
@@ -1102,7 +1103,9 @@ function CalendarEventDetail({ event, groups, tags, todos, onClose, onSave, onDe
         : saveState === 'conflict' ? '此日程已在其他窗口更新'
           : '已自动保存'
 
-  return <PlanningFloatingInspector label="日程详情" onClose={handleClose}><div className="space-y-6 p-5 pr-14"><div><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">日程详情</p><div className="mt-1 flex items-center gap-2"><p className="text-xs text-muted-foreground">{statusLabel}</p>{saveState === 'conflict' && <Button type="button" variant="link" size="sm" className="h-auto px-0 text-xs" onClick={reloadLatest}>重新加载</Button>}</div></div><CalendarEventFields draft={draft} setDraft={setDraft} groups={groups} tags={tags} todos={todos} /><div className="flex items-center justify-between border-t border-border/60 pt-4"><Button type="button" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => void onDelete(event)}><Trash2 size={15} />删除</Button><span className="text-xs text-muted-foreground">编辑后自动保存</span></div></div></PlanningFloatingInspector>
+  return <PlanningFloatingInspector label="日程详情" onClose={handleClose}><div className="space-y-6 p-5 pr-14"><div><p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">日程详情</p><div className="mt-1 flex items-center gap-2"><p className="text-xs text-muted-foreground">{statusLabel}</p>{saveState === 'conflict' && <Button type="button" variant="link" size="sm" className="h-auto px-0 text-xs" onClick={reloadLatest}>重新加载</Button>}</div></div><CalendarEventFields draft={draft} setDraft={setDraft} groups={groups} tags={tags} todos={todos} /><div className="flex items-center justify-between border-t border-border/60 pt-4"><Button type="button" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => void onDelete(event)}><Trash2 size={15} />删除</Button><span className="text-xs text-muted-foreground">编辑后自动保存</span></div>
+    <PlanningReminderEditor key={event.id} targetId={event.id} targetType="calendar_event" reminders={event.reminders} />
+  </div></PlanningFloatingInspector>
 }
 
 function CalendarTodoDetail({ todo, onClose }: { todo: Todo; onClose: () => void }): React.ReactElement {

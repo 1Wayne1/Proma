@@ -597,7 +597,7 @@ export function resolveFilePath(filePath: string, basePaths?: string[]): string 
 }
 
 /** 为内联 PDF 预览生成临时 HTML 文件（使用 proma-file:// 加载 PDF，无体积膨胀） */
-export async function preparePdfPreview(filePath: string, basePaths?: string[]): Promise<{ resolvedPath: string; tmpHtmlUrl: string } | null> {
+export async function preparePdfPreview(filePath: string, basePaths?: string[], validate?: () => void): Promise<{ resolvedPath: string; tmpHtmlUrl: string } | null> {
   const safePath = resolveTargetPath(filePath, basePaths)
   if (!existsSync(safePath)) return null
   const st = statSync(safePath)
@@ -611,7 +611,8 @@ export async function preparePdfPreview(filePath: string, basePaths?: string[]):
   try {
     const { registerPromaDirectoryPath, registerPromaFilePath } = await import('./local-file-protocol')
     registerFilePath = registerPromaFilePath
-    fileUrl = registerPromaFilePath(safePath)
+    validate?.()
+    fileUrl = registerPromaFilePath(safePath, { validate })
     pdfScriptUrl = registerPromaFilePath(require.resolve(`${PDFJS_PACKAGE}/build/pdf.min.mjs`))
     pdfWorkerUrl = registerPromaFilePath(require.resolve(`${PDFJS_PACKAGE}/build/pdf.worker.min.mjs`))
     const pdfPackageDir = dirname(require.resolve(`${PDFJS_PACKAGE}/package.json`))

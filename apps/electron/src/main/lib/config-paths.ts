@@ -49,7 +49,7 @@ export function getConfigDirName(): string {
  * 如果目录不存在则自动创建。
  */
 export function getConfigDir(): string {
-  const configDir = join(homedir(), getConfigDirName())
+  const configDir = resolveConfigDir()
 
   if (!existsSync(configDir)) {
     mkdirSync(configDir, { recursive: true })
@@ -57,6 +57,11 @@ export function getConfigDir(): string {
   }
 
   return configDir
+}
+
+/** 仅定位配置根，供不能触发目录创建的查询使用。 */
+export function resolveConfigDir(): string {
+  return join(homedir(), getConfigDirName())
 }
 
 /**
@@ -285,8 +290,8 @@ export function getAgentSessionMessagesPath(id: string): string {
  *
  * @returns ~/.proma/agent-workspaces.json
  */
-export function getAgentWorkspacesIndexPath(): string {
-  return join(getConfigDir(), 'agent-workspaces.json')
+export function getAgentWorkspacesIndexPath(configDir = getConfigDir()): string {
+  return join(configDir, 'agent-workspaces.json')
 }
 
 /**
@@ -324,6 +329,10 @@ export function getAgentWorkspacePath(slug: string): string {
   }
 
   return dir
+}
+
+export function resolveAgentWorkspacePath(slug: string, configDir = resolveConfigDir()): string {
+  return join(configDir, 'agent-workspaces', slug)
 }
 
 /**
