@@ -22,6 +22,8 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { ReleaseNotesViewer } from './ReleaseNotesViewer'
 import { VersionHistory } from './VersionHistory'
+import { bundledReleaseNotesRequestAtom } from './BundledReleaseNotesDialog'
+import { Button } from '@/components/ui/button'
 
 /** 从 package.json 构建时由 Vite define 注入 */
 declare const __APP_VERSION__: string
@@ -479,6 +481,7 @@ function ShellEnvironmentCard(): React.ReactElement | null {
 }
 
 export function AboutSettings(): React.ReactElement {
+  const openBundledReleaseNotes = useSetAtom(bundledReleaseNotesRequestAtom)
   return (
     <SettingsSection
       title="关于 Proma"
@@ -487,6 +490,9 @@ export function AboutSettings(): React.ReactElement {
       <SettingsCard>
         <SettingsRow label="版本">
           <span className="text-sm text-muted-foreground font-mono">{APP_VERSION}</span>
+        </SettingsRow>
+        <SettingsRow label="更新日志" description="查看随应用附带的发布说明">
+          <Button variant="outline" size="sm" onClick={() => openBundledReleaseNotes({})}>离线查看</Button>
         </SettingsRow>
         <SettingsRow label="运行时">
           <span className="text-sm text-muted-foreground">Electron + React</span>

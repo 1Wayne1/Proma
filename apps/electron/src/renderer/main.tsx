@@ -78,7 +78,7 @@ import type { FeishuBotBridgeState, FeishuBridgeState, DingTalkBotBridgeState, D
 import { Toaster } from './components/ui/sonner'
 import { TooltipProvider } from './components/ui/tooltip'
 import { toast } from 'sonner'
-import { ArrowUpRight } from 'lucide-react'
+import { BundledReleaseNotesDialog, bundledReleaseNotesRequestAtom } from './components/settings/BundledReleaseNotesDialog'
 import { diffCapabilities } from '@proma/shared'
 import type { WorkspaceCapabilities } from '@proma/shared'
 import { showCapabilityChangeToasts } from './lib/capabilities-toast'
@@ -361,6 +361,7 @@ function AgentSettingsInitializer(): null {
  */
 function UpdaterInitializer(): null {
   const setUpdateStatus = useSetAtom(updateStatusAtom)
+  const openBundledReleaseNotes = useSetAtom(bundledReleaseNotesRequestAtom)
   const updateStatus = useAtomValue(updateStatusAtom)
   const updateReminderSchedulerRef = useRef<UpdateReminderScheduler | null>(null)
   const readyToastIdRef = useRef<string | number | null>(null)
@@ -401,10 +402,9 @@ function UpdaterInitializer(): null {
             <button
               type="button"
               className="flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground active:scale-[0.96]"
-              onClick={() => { void window.electronAPI.openExternal('https://proma.cool/changelog') }}
+              onClick={() => openBundledReleaseNotes({ version })}
             >
               查看更新
-              <ArrowUpRight size={13} />
             </button>
             <button
               type="button"
@@ -463,7 +463,7 @@ function UpdaterInitializer(): null {
       dismissible: false,
       unstyled: true,
     })
-  }, [])
+  }, [openBundledReleaseNotes])
 
   useEffect(() => {
     if (!updateReminderSchedulerRef.current) {
@@ -1165,6 +1165,7 @@ if (isQuickTaskWindow) {
       <GlobalShortcuts />
       <PlanningQuickCapture />
       <TabSwitcher />
+      <BundledReleaseNotesDialog />
       <App />
     </React.StrictMode>
   )

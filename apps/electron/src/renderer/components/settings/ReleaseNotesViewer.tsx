@@ -90,43 +90,48 @@ export function ReleaseNotesViewer({
         </div>
       )}
 
-      {/* Release Notes 内容 */}
-      <div
-        className={cn(
-          'prose dark:prose-invert max-w-none',
-          compact ? 'text-xs prose-sm' : 'text-sm',
-          'prose-p:my-1.5 prose-p:leading-[1.6] prose-li:leading-[1.6]',
-          '[&>*:first-child]:mt-0 [&>*:last-child]:mb-0'
-        )}
-      >
-        {release.body ? (
-          <Markdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-              pre: ({ children: preChildren }) => <CodeBlock onCopy={copyTextToClipboard}>{preChildren}</CodeBlock>,
-              a: ({ href, children: linkChildren, ...linkProps }) => (
-                <a
-                  {...linkProps}
-                  href={href ?? undefined}
-                  onClick={(e) => {
-                    e.preventDefault()
-                    if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
-                      window.electronAPI.openExternal(href)
-                    }
-                  }}
-                  title={href ?? undefined}
-                >
-                  {linkChildren}
-                </a>
-              ),
-            }}
-          >
-            {release.body}
-          </Markdown>
-        ) : (
-          <p className="text-muted-foreground italic">暂无发布说明</p>
-        )}
-      </div>
+      <ReleaseNotesBody markdown={release.body} compact={compact} />
+    </div>
+  )
+}
+
+export function ReleaseNotesBody({ markdown, compact }: { markdown?: string | null; compact?: boolean }): React.ReactElement {
+  return (
+    <div
+      className={cn(
+        'prose dark:prose-invert max-w-none',
+        compact ? 'text-xs prose-sm' : 'text-sm',
+        'prose-p:my-1.5 prose-p:leading-[1.6] prose-li:leading-[1.6]',
+        '[&>*:first-child]:mt-0 [&>*:last-child]:mb-0'
+      )}
+    >
+      {markdown ? (
+        <Markdown
+          remarkPlugins={[remarkGfm]}
+          components={{
+            pre: ({ children: preChildren }) => <CodeBlock onCopy={copyTextToClipboard}>{preChildren}</CodeBlock>,
+            a: ({ href, children: linkChildren, ...linkProps }) => (
+              <a
+                {...linkProps}
+                href={href ?? undefined}
+                onClick={(e) => {
+                  e.preventDefault()
+                  if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
+                    window.electronAPI.openExternal(href)
+                  }
+                }}
+                title={href ?? undefined}
+              >
+                {linkChildren}
+              </a>
+            ),
+          }}
+        >
+          {markdown}
+        </Markdown>
+      ) : (
+        <p className="text-muted-foreground italic">暂无发布说明</p>
+      )}
     </div>
   )
 }
