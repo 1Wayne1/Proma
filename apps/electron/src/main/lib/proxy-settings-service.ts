@@ -20,8 +20,19 @@ const DEFAULT_PROXY_CONFIG: ProxyConfig = {
 }
 
 const SYSTEM_PROXY_CACHE_TTL_MS = 30_000
+let systemProxyCacheGeneration = 0
 let systemProxyCache: { expiresAt: number; result: Awaited<ReturnType<typeof detectSystemProxy>> } | undefined
 let pendingSystemProxyDetection: Promise<Awaited<ReturnType<typeof detectSystemProxy>>> | undefined
+
+/**
+ * 主动失效系统代理探测缓存。
+ * 递增代次确保重连前发起的慢速 OS 探测在迟到返回时不会回写污染新缓存。
+ */
+export function invalidateSystemProxyCache(): void {
+  systemProxyCacheGeneration += 1
+  systemProxyCache = undefined
+  pendingSystemProxyDetection = undefined
+}
 
 /**
  * 系统代理检测可能需要调用 OS 命令。合并并短暂缓存检测，避免网络请求热路径重复触发它。
@@ -31,14 +42,20 @@ async function getCachedSystemProxy(): Promise<Awaited<ReturnType<typeof detectS
   if (systemProxyCache && systemProxyCache.expiresAt > now) return systemProxyCache.result
 
   if (!pendingSystemProxyDetection) {
-    pendingSystemProxyDetection = detectSystemProxy()
+    const generation = systemProxyCacheGeneration
+    const currentDetection = detectSystemProxy()
       .then((result) => {
-        systemProxyCache = { result, expiresAt: Date.now() + SYSTEM_PROXY_CACHE_TTL_MS }
+        if (generation === systemProxyCacheGeneration) {
+          systemProxyCache = { result, expiresAt: Date.now() + SYSTEM_PROXY_CACHE_TTL_MS }
+        }
         return result
       })
       .finally(() => {
-        pendingSystemProxyDetection = undefined
+        if (pendingSystemProxyDetection === currentDetection) {
+          pendingSystemProxyDetection = undefined
+        }
       })
+    pendingSystemProxyDetection = currentDetection
   }
 
   return await pendingSystemProxyDetection
@@ -93,7 +110,7 @@ export async function saveProxySettings(config: ProxyConfig): Promise<void> {
 
   try {
     writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf-8')
-    systemProxyCache = undefined
+    invalidateSystemProxyCache()
     console.log('[代理配置] 配置已保存:', {
       ...config,
       manualUrl: config.manualUrl ? redactProxyUrl(config.manualUrl) : '',

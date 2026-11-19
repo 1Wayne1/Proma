@@ -77,6 +77,8 @@ interface McpConnection {
 
 interface McpConnectionEntry {
   promise: Promise<McpConnection>
+  connection?: McpConnection
+  transportKind: 'stdio' | 'network'
   activeLeases: number
   stale: boolean
   closed: boolean
@@ -338,14 +340,51 @@ export class PiMcpClientManager {
     requiredMcpFailureTimestamps.clear()
     await Promise.allSettled(
       entries.map(async (entry) => {
+        entry.stale = true
         try {
-          const conn = await entry.promise
-          await conn.close()
+          const conn = entry.connection ?? await entry.promise
+          if (!entry.closed) {
+            entry.closed = true
+            await conn.close()
+          }
         } catch {
           // 连接本身就失败了，忽略
         }
       }),
     )
+  }
+
+  /**
+   * 显式网络重连：仅清理空闲 HTTP/SSE MCP 连接并清空 required 冷却表；
+   * 正在执行中的工具租约（activeLeases > 0）仅标记 stale，待其自然结束后关闭，不中断也不重放；
+   * 本地 stdio MCP 子进程不受影响。
+   */
+  async reconnectNetworkConnections(): Promise<{ closedIdle: number; retiredActive: number; clearedCooldowns: number }> {
+    const clearedCooldowns = requiredMcpFailureTimestamps.size
+    requiredMcpFailureTimestamps.clear()
+
+    let closedIdle = 0
+    let retiredActive = 0
+    const idleClosers: Array<Promise<void>> = []
+
+    for (const [key, entry] of [...this.connections.entries()]) {
+      if (entry.transportKind !== 'network') continue
+      entry.stale = true
+      if (this.connections.get(key) === entry) {
+        this.connections.delete(key)
+      }
+      if (entry.activeLeases > 0) {
+        retiredActive += 1
+        continue
+      }
+      if (entry.connection && !entry.closed) {
+        closedIdle += 1
+        idleClosers.push(this.closeEntryIfIdleAndStale(entry))
+      }
+    }
+
+    await Promise.allSettled(idleClosers)
+    return { closedIdle, retiredActive, clearedCooldowns }
   }
 
   async listTools(serverName: string, config: PiMcpServerConfig): Promise<McpToolInfo[]> {
@@ -441,6 +480,7 @@ export class PiMcpClientManager {
 
   private async acquireConnection(serverName: string, config: PiMcpServerConfig, signal?: AbortSignal): Promise<McpConnectionLease> {
     const key = `${serverName}:${configHash(config)}`
+    const transportKind: 'stdio' | 'network' = config.type === 'http' || config.type === 'sse' ? 'network' : 'stdio'
     let entry = this.connections.get(key)
 
     if (!entry) {
@@ -451,6 +491,10 @@ export class PiMcpClientManager {
         if (this.connections.get(key) === createdEntry) {
           this.connections.delete(key)
         }
+      }).then(async (connection) => {
+        createdEntry.connection = connection
+        await this.closeEntryIfIdleAndStale(createdEntry)
+        return connection
       }).catch((error) => {
         createdEntry.stale = true
         if (this.connections.get(key) === createdEntry) {
@@ -460,6 +504,7 @@ export class PiMcpClientManager {
       })
       createdEntry = {
         promise,
+        transportKind,
         activeLeases: 0,
         stale: false,
         closed: false,
@@ -477,6 +522,7 @@ export class PiMcpClientManager {
       }
     } catch (error) {
       entry.activeLeases -= 1
+      void this.closeEntryIfIdleAndStale(entry)
       throw error
     }
   }
@@ -488,14 +534,20 @@ export class PiMcpClientManager {
     }
   }
 
+  private async closeEntryIfIdleAndStale(entry: McpConnectionEntry): Promise<void> {
+    if (!entry.stale || entry.closed || entry.activeLeases > 0 || !entry.connection) return
+    entry.closed = true
+    try {
+      await entry.connection.close()
+    } catch {
+      // Session 已由服务端终止或过期连接关闭失败，不影响重新握手。
+    }
+  }
+
   private async releaseConnection(lease: McpConnectionLease): Promise<void> {
     lease.entry.activeLeases -= 1
-    if (!lease.entry.stale || lease.entry.closed || lease.entry.activeLeases > 0) return
-    try {
-      await lease.connection.close()
-    } catch {
-      // Session 已由服务端终止，关闭旧 transport 失败不影响重新握手。
-    }
+    lease.entry.connection ??= lease.connection
+    await this.closeEntryIfIdleAndStale(lease.entry)
   }
 
   private async createConnection(
@@ -641,6 +693,13 @@ export async function buildPiMcpTools(mcpServers: PiMcpServers, proxyUrl?: strin
   }
 
   return tools
+}
+
+/**
+ * 显式网络重连时清理空闲 HTTP/SSE MCP 连接并重置冷却窗口，不中断进行中的工具调用。
+ */
+export async function reconnectPiMcpNetworkConnections(): Promise<{ closedIdle: number; retiredActive: number; clearedCooldowns: number }> {
+  return manager.reconnectNetworkConnections()
 }
 
 /**

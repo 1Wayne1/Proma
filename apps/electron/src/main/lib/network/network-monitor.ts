@@ -1,11 +1,22 @@
 import { createHash } from 'node:crypto'
-import type { NetworkEndpointStatus, NetworkSource, NetworkStatusSnapshot } from '@proma/shared'
+import type {
+  NetworkEndpointStatus,
+  NetworkFailureKind,
+  NetworkReconnectStatus,
+  NetworkSource,
+  NetworkStatusSnapshot,
+} from '@proma/shared'
 import { classifyNetworkFailure } from './network-errors'
 import { throwIfNetworkOperationAborted, waitForNetworkOperation } from './network-recovery'
 
 interface Observation {
   id: string
   generation: number
+}
+
+export interface ReconnectToken {
+  generation: number
+  epoch: number
 }
 
 /** 仅依赖可调用签名，不要求 Bun 专有的 fetch.preconnect 扩展。 */
@@ -17,6 +28,9 @@ export interface NetworkFetch {
 export class NetworkMonitor {
   private revision = 0
   private generation = 0
+  private reconnectEpoch = 0
+  private reconnectGeneration = 0
+  private reconnectStatus?: NetworkReconnectStatus
   private onlineHint: boolean | null = null
   private readonly entries = new Map<string, { generation: number; status: NetworkEndpointStatus }>()
   private readonly listeners = new Set<(snapshot: NetworkStatusSnapshot) => void>()
@@ -24,7 +38,12 @@ export class NetworkMonitor {
   constructor(private readonly now: () => number = Date.now) {}
 
   snapshot(): NetworkStatusSnapshot {
-    return { revision: this.revision, onlineHint: this.onlineHint, endpoints: [...this.entries.values()].map(entry => ({ ...entry.status })) }
+    return {
+      revision: this.revision,
+      onlineHint: this.onlineHint,
+      endpoints: [...this.entries.values()].map(entry => ({ ...entry.status })),
+      ...(this.reconnectStatus ? { reconnect: { ...this.reconnectStatus } } : {}),
+    }
   }
 
   subscribe(listener: (snapshot: NetworkStatusSnapshot) => void): () => void {
@@ -64,6 +83,29 @@ export class NetworkMonitor {
       ...(result.httpStatus === undefined ? {} : { httpStatus: result.httpStatus }),
     }
     this.publish()
+  }
+
+  beginReconnect(): ReconnectToken {
+    const generation = ++this.reconnectGeneration
+    this.reconnectStatus = { epoch: this.reconnectEpoch, state: 'reconnecting', updatedAt: this.now() }
+    this.publish()
+    return { generation, epoch: this.reconnectEpoch }
+  }
+
+  finishReconnect(
+    token: ReconnectToken,
+    result: { state: 'ready' | 'failed' | 'cancelled'; failureKind?: NetworkFailureKind },
+  ): NetworkStatusSnapshot {
+    if (token.generation !== this.reconnectGeneration) return this.snapshot()
+    if (result.state === 'ready') this.reconnectEpoch += 1
+    this.reconnectStatus = {
+      epoch: this.reconnectEpoch,
+      state: result.state,
+      updatedAt: this.now(),
+      ...(result.failureKind === undefined ? {} : { failureKind: result.failureKind }),
+    }
+    this.publish()
+    return this.snapshot()
   }
 }
 

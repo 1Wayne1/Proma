@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { redactProxyUrl } from './proxy-settings-service'
+import { invalidateSystemProxyCache, redactProxyUrl } from './proxy-settings-service'
 
 describe('proxy settings logging', () => {
   test('Given an authenticated proxy URL When formatting it for logs Then redacts both username and password', () => {
@@ -12,5 +12,12 @@ describe('proxy settings logging', () => {
 
   test('Given a malformed proxy URL When formatting it for logs Then never returns the original value', () => {
     expect(redactProxyUrl('alice:secret@not a url')).toBe('[invalid proxy URL]')
+  })
+
+  test('Given system proxy cache invalidation When called repeatedly Then succeeds idempotently without side effects', () => {
+    expect(() => {
+      invalidateSystemProxyCache()
+      invalidateSystemProxyCache()
+    }).not.toThrow()
   })
 })

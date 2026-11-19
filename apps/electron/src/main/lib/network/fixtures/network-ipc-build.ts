@@ -8,8 +8,10 @@ const build = await Bun.build({
   entrypoints: [join(import.meta.dir, 'network-ipc-probe.ts')], target: 'node', format: 'cjs', outdir,
   plugins: [{ name: 'network-ipc-host-fixture', setup(builder) {
     builder.onResolve({ filter: /^electron$/ }, () => ({ path: stub }))
-    builder.onResolve({ filter: /^\.\.\/(?:channel-manager|main-window-store|proxy-fetch|proxy-settings-service)$/ }, args =>
-      args.importer.endsWith('network-ipc.ts') ? { path: stub } : undefined)
+    builder.onResolve(
+      { filter: /^\.\.\/(?:channel-manager|main-window-store|proxy-fetch|proxy-settings-service|browser-controller|adapters\/pi-mcp-tools)$/ },
+      args => args.importer.endsWith('network-ipc.ts') ? { path: stub } : undefined,
+    )
   } }],
 })
 if (!build.success) {

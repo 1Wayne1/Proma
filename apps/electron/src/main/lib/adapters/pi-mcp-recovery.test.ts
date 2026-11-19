@@ -17,7 +17,9 @@ interface FixtureOptions {
   rejectFirstDiscovery?: boolean
   rejectFirstMutation?: boolean
   initializationGate?: Promise<void>
+  mutationGate?: Promise<void>
   onInitialize?: () => void
+  onMutation?: () => void
 }
 
 async function createMcpFixture(options: FixtureOptions = {}) {
@@ -50,6 +52,8 @@ async function createMcpFixture(options: FixtureOptions = {}) {
       }
       if (rpc.method === 'tools/call') {
         counts.mutations += 1
+        options.onMutation?.()
+        await options.mutationGate
         if (options.rejectFirstMutation && counts.mutations === 1) { send(404, { error: 'Session expired' }); return }
         send(200, { jsonrpc: '2.0', id: rpc.id, result: { content: [{ type: 'text', text: 'done' }] } })
         return
@@ -180,4 +184,93 @@ describe('MCP 连接恢复与工具重放边界', () => {
       rmSync(directory, { recursive: true, force: true })
     }
   }, 20_000)
+
+  test('Given 空闲 HTTP MCP 连接 When 显式网络重连 Then 仅关闭空闲连接且不重放工具调用', async () => {
+    const fixture = await createMcpFixture()
+    const manager = new PiMcpClientManager()
+    try {
+      const tools = await manager.listTools('idle-http', fixture.config)
+      expect(tools[0]?.name).toBe('write_file')
+      expect(fixture.counts.initializes).toBe(1)
+
+      const summary = await manager.reconnectNetworkConnections()
+      expect(summary).toEqual({ closedIdle: 1, retiredActive: 0, clearedCooldowns: 0 })
+      expect(fixture.counts.mutations).toBe(0)
+
+      // 重连后的下一次显式调用应建立新连接。
+      await manager.callTool('idle-http', fixture.config, 'write_file', {})
+      expect(fixture.counts.initializes).toBe(2)
+      expect(fixture.counts.mutations).toBe(1)
+    } finally {
+      await manager.dispose()
+      await fixture.close()
+    }
+  })
+
+  test('Given 正在执行 HTTP callTool When 期间显式网络重连 Then 不中断也不重放且完成后退休旧连接', async () => {
+    let finishMutation!: () => void
+    let markMutationStarted!: () => void
+    const mutationGate = new Promise<void>((resolve) => { finishMutation = resolve })
+    const mutationStarted = new Promise<void>((resolve) => { markMutationStarted = resolve })
+    const fixture = await createMcpFixture({
+      mutationGate,
+      onMutation: markMutationStarted,
+    })
+    const manager = new PiMcpClientManager()
+    try {
+      const activeCall = manager.callTool('active-http', fixture.config, 'write_file', {})
+      await mutationStarted
+
+      const summary = await manager.reconnectNetworkConnections()
+      expect(summary).toEqual({ closedIdle: 0, retiredActive: 1, clearedCooldowns: 0 })
+
+      finishMutation()
+      const firstResult = await activeCall
+      expect(firstResult.content).toEqual([{ type: 'text', text: 'done' }])
+      expect(fixture.counts.mutations).toBe(1)
+      expect(fixture.counts.initializes).toBe(1)
+
+      // 退休旧连接后，下一次显式调用建立全新连接。
+      await manager.callTool('active-http', fixture.config, 'write_file', {})
+      expect(fixture.counts.initializes).toBe(2)
+      expect(fixture.counts.mutations).toBe(2)
+    } finally {
+      finishMutation()
+      await manager.dispose()
+      await fixture.close()
+    }
+  })
+
+  test('Given stdio MCP 连接 When 显式网络重连 Then 不关闭本地 stdio 连接且可继续复用', async () => {
+    const manager = new PiMcpClientManager()
+    const stdioScript = [
+      'const rl = require("node:readline").createInterface({ input: process.stdin });',
+      'rl.on("line", (line) => {',
+      '  if (!line.trim()) return;',
+      '  const msg = JSON.parse(line);',
+      '  if (msg.method === "initialize") {',
+      '    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "stdio-fixture", version: "1" } } }) + "\\n");',
+      '  } else if (msg.method === "tools/list") {',
+      '    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { tools: [{ name: "echo", inputSchema: { type: "object" } }] } }) + "\\n");',
+      '  } else if (msg.method === "tools/call") {',
+      '    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "ok:" + process.pid }] } }) + "\\n");',
+      '  }',
+      '});',
+      'process.stdin.on("end", () => process.exit(0));',
+    ].join('\n')
+    const stdioConfig = { type: 'stdio', command: process.execPath, args: ['-e', stdioScript], startup_timeout_sec: 5 }
+    try {
+      const tools = await manager.listTools('local-stdio', stdioConfig)
+      expect(tools[0]?.name).toBe('echo')
+      const before = await manager.callTool('local-stdio', stdioConfig, 'echo', {})
+
+      const summary = await manager.reconnectNetworkConnections()
+      expect(summary).toEqual({ closedIdle: 0, retiredActive: 0, clearedCooldowns: 0 })
+
+      const after = await manager.callTool('local-stdio', stdioConfig, 'echo', {})
+      expect(after.content).toEqual(before.content)
+    } finally {
+      await manager.dispose()
+    }
+  })
 })

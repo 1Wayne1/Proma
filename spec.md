@@ -2,13 +2,13 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | 1.0.24 |
+| 文档版本 | 1.0.25 |
 | 制定日期 | 2026-11-16 |
-| 状态 | M1、S5、S6 桌面窗口主流程及 S7 新装、覆盖升级、Automation 和 Collaboration 已通过 macOS arm64 实机验收。Pi 已升级至 `1.5.2`。多屏 DPI、正式发布和 Windows 完整验收待完成 |
+| 状态 | M1、S5、S6 桌面窗口主流程及 S7 新装、覆盖升级、Automation 和 Collaboration 已通过 macOS arm64 实机验收。Pi 已升级至 `1.5.2`。macOS `0.22.80` 差异移植已在工作区完成显式网络重连（`0.19.87`）与旧 Chat 兼容入口调查。多屏 DPI、正式发布和 Windows 完整验收待完成 |
 | 开发分支 | `dev/new-version-features` |
 | 源码基线 | 桌面应用 `0.19.58`；提交 `86d9dfb511db4c1e3ffded3b6c3e312996f50cbf` |
-| 参考安装版 | `D:\Program Files\Proma`，桌面应用 `0.22.80` |
-| 当前版本 | 桌面应用 `0.19.83`，Pi `1.5.2`，共享包 `0.1.81`。此前的 S7 macOS 补验基线为 `10b98fb7`（桌面应用 `0.19.82`，Pi `0.87.1`） |
+| 参考安装版 | `D:\Program Files\Proma`，桌面应用 `0.22.80`（macOS 差异对照目标 `/Applications/Proma.app/Contents/Resources/app.asar`，同为 `0.22.80`） |
+| 当前版本 | 提交基线 `dcdf68e9` 为桌面应用 `0.19.83`、Pi `1.5.2`、共享包 `0.1.81`；当前工作区迭代已推进至桌面应用 `0.19.87`、共享包 `0.1.83`。此前的 S7 macOS 补验基线为 `10b98fb7`（桌面应用 `0.19.82`，Pi `0.87.1`） |
 | 首要平台 | Windows；共享逻辑需维持 macOS/Linux 的既有能力 |
 | 接手入口 | [当前交接记录](docs/plans/2026-11-17-local-upgrade-handoff.md)，包含 M1、S5—S7 的 macOS 验收结果 |
 
@@ -934,3 +934,32 @@ S6-02 基线为 `755dbc1b`。桌面应用 `0.19.79` 更新了 `knowledge-mainten
 - `0.19.78` 的记忆、历史修订和权限升级回归通过。已有第三方 Responses 渠道完成 Automation 手动与定时触发，以及 Collaboration 的双子任务委派、等待和汇总。隔离的真实渠道实例触发 macOS 钥匙串提示，测试实例已退出，临时渠道副本已清理。后续隔离回归使用模拟钥匙串和合成渠道，保留正式应用的凭据存储行为。
 
 待验收项为 S6 多显示器混合 DPI、S5/S6 的 Windows 完整实机流程、Windows 安装与覆盖升级及打包资源、macOS 正式签名、公证和真实自动更新链。本轮模型的外部通路沿用用户配置的第三方 Responses，真实 Codex OAuth 请求延后。
+
+## 36. 显式网络重连与旧 Chat 兼容入口调查（2026-11-19）
+
+本轮继续在 `dev/new-version-features` 未提交工作区对照 macOS 正式版 `/Applications/Proma.app/Contents/Resources/app.asar`（版本 `0.22.80`，SHA-256 `bd18f6e413ca3d35d286b1a3b204eb24cdcec530a77e6bab5869888938aa22d4`，清单父 Evidence `ev_f67ed6e99fa08c626a4a32fa12b9cd869f4bbc5426a68471653b394a6027b377`），保留既有的离线更新日志、浮窗预览与记忆未提交改动，且严格不接入任何 Proma 云服务。
+
+### 36.1 REA 证据标识
+
+- 清单视图与提取 Evidence：`ev_06f910eeca36a3cbd6ea9ce953136db731fb253c0dcf1aaf0dc879fec909e2fd`（核对 `dist/main.cjs` SHA-256 `d10ea61573e0ccad670f438e4cb22c8f4a66fea16ce2bd1bc1bde389f47a19f3`、`dist/preload.cjs` SHA-256 `20b7eb1b6cd4ebb2067f0d7d6188565e55564dc3176d2c9a95e14b00a0e6a918`）、`ev_e6f11f01431f035c99339de1d6482b9e849fc6c7137d102a499a25ff67b843c0`（核对 `dist/agent-runtime.cjs`、`dist/renderer/assets/index-Dx4hpBZK.js`）及 `ev_fc0166b1088be36a90fe8f03c8de3e3d2a3fc2c2d55fd88675f04e77f09b2b99`（提取上述三项）。
+
+### 36.2 显式网络重连核对与实现（桌面应用 `0.19.87` / `@proma/shared` `0.1.83`）
+
+- 正式版行为观察：`preload.cjs` 行 938/1510 暴露 `network:reconnect` / `reconnectNetwork`，`main.cjs` 行 421781 调用 `systemNetwork.recover("user-reconnect")`。并发请求合并至同一个 `recovering` Promise（限时 5 秒），刷新代理配置与 `clearHostResolverCache()` 并递增 `networkEpoch` 后广播 `network:status-changed`；`WebSocketBroker` 仅将旧 epoch 套接字标 `retired`（空闲立即关闭、忙时待响应结束后关闭），`agent-runtime.cjs` 行 12818-12823 接收 `EVENT_NETWORK_EPOCH` 不中断活跃模型流也不重放工具；`recover()` 不发云端请求（云端健康检查位于 `networkDiagnostics.check` 对 `api.proma.cool`，社区版排除）。
+- 社区版实现：
+  - `@proma/shared`（`packages/shared/src/types/network.ts`）：新增 `NetworkReconnectState`、`NetworkReconnectStatus`、`NetworkReconnectInput`、`NetworkStatusSnapshot.reconnect`、`NETWORK_IPC_CHANNELS.RECONNECT`（`network:reconnect`）与 `CANCEL_RECONNECT`（`network:cancel-reconnect`）。
+  - 底层刷新原语：`proxy-settings-service.ts` 新增带代次保护的 `invalidateSystemProxyCache()`，避免重连前发起的慢速 OS 代理检测迟到污染缓存；`browser-controller.ts` 新增 `refreshNetworkSessions()`，对唯一受管 `Session` 调用 `forceReloadProxyConfig` 与 `clearHostResolverCache`，不重载页面、关闭标签页或中止进行中的浏览器任务；`pi-mcp-tools.ts` 新增 `reconnectNetworkConnections()` / `reconnectPiMcpNetworkConnections()`，清理空闲 HTTP/SSE 连接及 `requiredMcpFailureTimestamps` 冷却记录，有进行中租约（`activeLeases > 0`）的连接仅标 `stale` 待完成后回收，本地 `stdio` 子进程连接保留。
+  - 状态与协调：`network-monitor.ts` 新增 `beginReconnect()` / `finishReconnect()`（代次门控防旧轮次覆盖新状态）；新增 `network-reconnect.ts`（`NetworkReconnectCoordinator`），合并并发重连请求、限时 5 秒、隔离迟到完成，支持按 `owner` / `requestId` 精确取消（保留其他合并等待者）和退出 `cancelAll()`。
+  - 四层 IPC 与 UI：`network-ipc.ts` 注册 `RECONNECT` 与 `CANCEL_RECONNECT`，强制校验主窗口和 `mainFrame`、校验 `requestId`、绑定 `sender` 销毁取消并在 `before-quit` 清理；`preload/index.ts` 暴露 `reconnectNetwork` / `cancelNetworkReconnect`；`NetworkDiagnosticsSettings.tsx` 展示重连状态与轮次，新增「重新连接」与「取消重连」按钮并绑定卸载自动取消。
+
+### 36.3 旧 Chat 兼容入口调查结论（仅调查归档，本轮未新建旧 Chat 接口）
+
+- 正式版实证：`0.22.80` 已移除完整 Chat IPC（`chat:list-conversations`、`chat:send-message`、`chat-tools:*` 在 `preload.cjs` 与 `main.cjs` 均无匹配），在 `main.cjs:226423-226896` 及 `420953` 实现 `legacy-chat-service.ts` / `legacy-chat-ipc.ts`，并在 `index-Dx4hpBZK.js:6185245-6190669` 对应设置页「历史 Chat」标签页：
+  - `legacy-chat:get-summary`：只读统计 `conversations.json` 与 `chat-tools.json` 中有效记录数量与状态（不修改或创建配置目录）。
+  - `legacy-chat:list-history`：对坏条目容错后按标题检索、归档筛选与分页返回对话元数据（不抛错阻断列表）。
+  - `legacy-chat:prepare-session`：为选定或全量历史对话 / 自定义工具在 `<configDir>/agent-workspaces/<slug>/<sessionId>/legacy-chat-<kind>/snapshot-<uuid>/` 下原子写入带 `untrustedData: true` 标注的受限快照，按字节和行数限额截断消息并仅保留附件文件名/MIME，且剥离自定义 HTTP 工具的 URL/Header/Body 常量与 `toolCredentials`，替换为环境变量占位符，引导 Agent 辅助阅读或转为 Skill，全程不修改原始文件。
+- 对照社区版现状与缺口：社区版保留完整 Chat 模式及 S7 已加固的 `conversation-manager.ts`、`chat-tool-config.ts` 和单会话幂等导入 `agent:migrate-chat-to-agent`，但相对正式版存在三项独立缺口：
+  1. 无副作用只读概览与坏索引容错列表（`listConversations()` 遇损坏索引抛错，且 `getConfigDir()` 有建目录副作用）；
+  2. 对含局部坏行或超大历史的对话按字节/行数有界导出为 `untrustedData` 工作台快照（`migrateChatToAgentSession` 严格校验遇坏行拒绝，且直接写入 Agent 会话消息）；
+  3. 将 `chat-tools.json` 自定义 HTTP 工具剥离常量与凭据后导出为脱敏清单供 Agent 转为 Skill（社区版尚无对应实现）。
+- 额外观察：正式版 `legacy-chat-ipc.ts` 未对 `event.sender` / `mainFrame` 做主窗口归属校验；若后续确认实施，社区版须保留现有 Chat UI、补齐主窗口/主 frame 校验、原子写、原文件只读及坏行/重复执行测试。

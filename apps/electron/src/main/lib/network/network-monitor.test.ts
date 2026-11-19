@@ -92,4 +92,19 @@ describe('网络状态与匿名诊断', () => {
       expect(snapshot.endpoints[0]).toMatchObject({ state: 'failed', failureKind: 'timeout' })
     } finally { clearTimeout(timer) }
   })
+  test('Given 重连代次变化 When 旧代次迟到完成 Then 不覆盖新代次状态且快照防外部篡改', () => {
+    let now = 100
+    const monitor = new NetworkMonitor(() => now)
+    const stale = monitor.beginReconnect()
+    now = 200
+    const current = monitor.beginReconnect()
+    monitor.finishReconnect(stale, { state: 'ready' })
+    expect(monitor.snapshot().reconnect).toEqual({ epoch: 0, state: 'reconnecting', updatedAt: 200 })
+
+    now = 300
+    const ready = monitor.finishReconnect(current, { state: 'ready' })
+    expect(ready.reconnect).toEqual({ epoch: 1, state: 'ready', updatedAt: 300 })
+    if (ready.reconnect) ready.reconnect.epoch = 999
+    expect(monitor.snapshot().reconnect?.epoch).toBe(1)
+  })
 })

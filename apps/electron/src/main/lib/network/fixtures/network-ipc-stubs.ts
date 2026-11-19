@@ -34,8 +34,39 @@ export const state: {
   canceled: boolean
   duringDialog?: () => Promise<void>
   nextFetch?: () => Promise<Response>
+  nextReconnectProxy?: () => Promise<void>
   requests: Array<{ input: string; method?: string; credentials?: string; redirect?: string; hasHeaders: boolean }>
-} = { destination: '', canceled: false, requests: [] }
+  reconnectCalls: {
+    invalidateProxy: number
+    getProxy: number
+    defaultProxyReload: number
+    defaultDnsClear: number
+    browserRefresh: number
+    mcpReconnect: number
+  }
+} = {
+  destination: '',
+  canceled: false,
+  requests: [],
+  reconnectCalls: {
+    invalidateProxy: 0,
+    getProxy: 0,
+    defaultProxyReload: 0,
+    defaultDnsClear: 0,
+    browserRefresh: 0,
+    mcpReconnect: 0,
+  },
+}
+export const session = {
+  defaultSession: {
+    forceReloadProxyConfig: async (): Promise<void> => {
+      state.reconnectCalls.defaultProxyReload += 1
+    },
+    clearHostResolverCache: async (): Promise<void> => {
+      state.reconnectCalls.defaultDnsClear += 1
+    },
+  },
+}
 export const dialog = {
   showSaveDialog: async (): Promise<{ canceled: boolean; filePath: string }> => {
     await state.duringDialog?.()
@@ -45,7 +76,25 @@ export const dialog = {
 export const getMainWindow = (): { webContents: typeof sender } => ({ webContents: sender })
 export const getChannelById = (id: string): { baseUrl: string } | undefined => id === 'fixture'
   ? { baseUrl: 'https://user:private-password@example.test/private?api_key=private-key' } : undefined
-export const getEffectiveProxyUrl = async (): Promise<undefined> => undefined
+export const invalidateSystemProxyCache = (): void => {
+  state.reconnectCalls.invalidateProxy += 1
+}
+export const getEffectiveProxyUrl = async (): Promise<undefined> => {
+  if (state.nextReconnectProxy) {
+    state.reconnectCalls.getProxy += 1
+    await state.nextReconnectProxy()
+  }
+  return undefined
+}
+export const browserController = {
+  refreshNetworkSessions: async (): Promise<void> => {
+    state.reconnectCalls.browserRefresh += 1
+  },
+}
+export const reconnectPiMcpNetworkConnections = async (): Promise<{ closedIdle: number; retiredActive: number; clearedCooldowns: number }> => {
+  state.reconnectCalls.mcpReconnect += 1
+  return { closedIdle: 0, retiredActive: 0, clearedCooldowns: 0 }
+}
 export const createManagedProxyFetch = (): { fetch: NetworkFetch; close: () => Promise<void> } => ({
   fetch: async (input, init) => {
     state.requests.push({ input: String(input), method: init?.method, credentials: init?.credentials, redirect: init?.redirect, hasHeaders: init?.headers !== undefined })

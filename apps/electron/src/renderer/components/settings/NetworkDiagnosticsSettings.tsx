@@ -1,6 +1,6 @@
 import * as React from 'react'
 import { useAtom, useAtomValue, useSetAtom } from 'jotai'
-import type { NetworkEndpointState, NetworkFailureKind } from '@proma/shared'
+import type { NetworkEndpointState, NetworkFailureKind, NetworkReconnectState } from '@proma/shared'
 import { Button } from '@/components/ui/button'
 import { channelsAtom } from '@/atoms/chat-atoms'
 import { acceptNetworkStatusAtom, connectNetworkStatus, networkDiagnosticPreviewAtom, networkStatusAtom } from '@/atoms/network-atoms'
@@ -8,6 +8,9 @@ import { SettingsCard, SettingsSection } from './primitives'
 
 const stateLabels: Record<NetworkEndpointState, string> = {
   checking: '检查中', reachable: '连接可达', failed: '连接失败', closed: '连接已关闭', cancelled: '已取消',
+}
+const reconnectLabels: Record<NetworkReconnectState, string> = {
+  idle: '待命', reconnecting: '重连中', ready: '已就绪', failed: '重连失败', cancelled: '已取消',
 }
 const failureLabels: Record<NetworkFailureKind, string> = {
   cancelled: '已取消', authentication: '认证失败', permission: '访问被拒绝', quota: '额度不足', validation: '请求或配置错误',
@@ -20,9 +23,10 @@ export function NetworkDiagnosticsSettings(): React.ReactElement {
   const channels = useAtomValue(channelsAtom)
   const [preview, setPreview] = useAtom(networkDiagnosticPreviewAtom)
   const [channelId, setChannelId] = React.useState('')
-  const [busy, setBusy] = React.useState<'check' | 'preview' | 'export' | null>(null)
+  const [busy, setBusy] = React.useState<'check' | 'reconnect' | 'preview' | 'export' | null>(null)
   const [message, setMessage] = React.useState('')
   const request = React.useRef<string | null>(null)
+  const reconnectRequest = React.useRef<string | null>(null)
   const live = React.useRef(false)
   const lifecycle = React.useRef(0)
   React.useEffect(() => {
@@ -40,10 +44,11 @@ export function NetworkDiagnosticsSettings(): React.ReactElement {
       window.removeEventListener('online', notify)
       window.removeEventListener('offline', notify)
       if (request.current) void window.electronAPI.cancelNetworkCheck(request.current).catch(() => {})
+      if (reconnectRequest.current) void window.electronAPI.cancelNetworkReconnect(reconnectRequest.current).catch(() => {})
     }
   }, [accept])
 
-  const perform = async (action: 'check' | 'preview' | 'export'): Promise<void> => {
+  const perform = async (action: 'check' | 'reconnect' | 'preview' | 'export'): Promise<void> => {
     const generation = lifecycle.current
     const isCurrent = (): boolean => live.current && lifecycle.current === generation
     setBusy(action)
@@ -55,6 +60,20 @@ export function NetworkDiagnosticsSettings(): React.ReactElement {
         request.current = id
         const snapshot = await window.electronAPI.checkNetworkConnection({ requestId: id, channelId })
         if (isCurrent() && request.current === id) accept(snapshot)
+      } else if (action === 'reconnect') {
+        setPreview(null)
+        const id = crypto.randomUUID()
+        reconnectRequest.current = id
+        const snapshot = await window.electronAPI.reconnectNetwork({ requestId: id })
+        if (isCurrent() && reconnectRequest.current === id) {
+          accept(snapshot)
+          const reconnect = snapshot.reconnect
+          if (reconnect?.state === 'ready') setMessage(`已完成第 ${reconnect.epoch} 轮本地网络刷新`)
+          else if (reconnect?.state === 'cancelled') setMessage('已取消重新连接')
+          else if (reconnect?.state === 'failed') {
+            setMessage(reconnect.failureKind ? `重新连接未完成：${failureLabels[reconnect.failureKind]}` : '重新连接未完成，请检查代理与网络设置')
+          }
+        }
       } else if (action === 'preview') {
         const value = await window.electronAPI.previewNetworkDiagnostics()
         if (isCurrent()) setPreview(value)
@@ -63,9 +82,17 @@ export function NetworkDiagnosticsSettings(): React.ReactElement {
         if (isCurrent()) setMessage(result.status === 'saved' ? '已导出当前预览的诊断' : '已取消导出')
       }
     } catch {
-      if (isCurrent()) setMessage(action === 'check' ? '检查未完成，请确认渠道地址和代理设置' : '操作未完成，请重新预览后重试')
+      if (isCurrent()) {
+        if (action === 'check') setMessage('检查未完成，请确认渠道地址和代理设置')
+        else if (action === 'reconnect') setMessage('重新连接未完成，请检查网络或代理设置')
+        else setMessage('操作未完成，请重新预览后重试')
+      }
     } finally {
-      if (isCurrent()) { request.current = null; setBusy(null) }
+      if (isCurrent()) {
+        if (action === 'check') request.current = null
+        if (action === 'reconnect') reconnectRequest.current = null
+        setBusy(null)
+      }
     }
   }
 
@@ -75,7 +102,14 @@ export function NetworkDiagnosticsSettings(): React.ReactElement {
     <SettingsCard divided={false}>
       <div className="space-y-3 p-4">
         <p className="text-sm">系统联网提示：{status?.onlineHint === null || !status ? '未知' : status.onlineHint ? '系统报告可联网' : '系统报告离线'}</p>
+        {status?.reconnect && (
+          <p className="text-xs text-muted-foreground">
+            本地重连状态：{reconnectLabels[status.reconnect.state]}（第 {status.reconnect.epoch} 轮）
+            {status.reconnect.failureKind && status.reconnect.state !== 'cancelled' && ` · ${failureLabels[status.reconnect.failureKind]}`}
+          </p>
+        )}
         <p className="text-xs text-muted-foreground">检查只访问渠道的服务源，不发送模型密钥、不跟随跳转。收到 HTTP 响应表示可达，不代表模型认证或工具执行成功。</p>
+        <p className="text-xs text-muted-foreground">重新连接会刷新本地代理缓存、浏览器网络配置并清理空闲网络 MCP 连接，不中断活跃任务、不重放有副作用调用、不访问云端服务。</p>
         <label className="block text-sm" htmlFor="network-check-channel">选择已有渠道</label>
         <select id="network-check-channel" value={channelId} onChange={event => setChannelId(event.target.value)} disabled={busy !== null}
           className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm">
@@ -83,6 +117,13 @@ export function NetworkDiagnosticsSettings(): React.ReactElement {
           {eligible.map(channel => <option key={channel.id} value={channel.id}>{channel.name}</option>)}
         </select>
         <div className="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" disabled={busy !== null} onClick={() => { void perform('reconnect') }}>{busy === 'reconnect' ? '重连中…' : '重新连接'}</Button>
+          {busy === 'reconnect' && <Button variant="outline" size="sm" onClick={() => {
+            const generation = lifecycle.current
+            if (reconnectRequest.current) void window.electronAPI.cancelNetworkReconnect(reconnectRequest.current).then(() => {
+              if (live.current && lifecycle.current === generation) setMessage('已请求取消重连')
+            }).catch(() => { if (live.current && lifecycle.current === generation) setMessage('取消未完成，请稍后重试') })
+          }}>取消重连</Button>}
           <Button variant="outline" size="sm" disabled={busy !== null || !validSelection} onClick={() => { void perform('check') }}>{busy === 'check' ? '检查中…' : '检查连接'}</Button>
           {busy === 'check' && <Button variant="outline" size="sm" onClick={() => {
             const generation = lifecycle.current

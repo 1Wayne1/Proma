@@ -4,6 +4,18 @@ export type NetworkFailureKind =
 
 export type NetworkSource = 'http' | 'mcp' | 'probe'
 export type NetworkEndpointState = 'checking' | 'reachable' | 'failed' | 'closed' | 'cancelled'
+export type NetworkReconnectState = 'idle' | 'reconnecting' | 'ready' | 'failed' | 'cancelled'
+
+export interface NetworkReconnectStatus {
+  epoch: number
+  state: NetworkReconnectState
+  updatedAt: number
+  failureKind?: NetworkFailureKind
+}
+
+export interface NetworkReconnectInput {
+  requestId?: string
+}
 
 export interface NetworkEndpointStatus {
   /** 匿名连接标识，不携带地址、渠道名、工具参数或凭据。 */
@@ -19,6 +31,7 @@ export interface NetworkStatusSnapshot {
   revision: number
   onlineHint: boolean | null
   endpoints: NetworkEndpointStatus[]
+  reconnect?: NetworkReconnectStatus
 }
 
 export interface NetworkCheckInput {
@@ -48,6 +61,8 @@ export const NETWORK_IPC_CHANNELS = {
   STATUS_CHANGED: 'network:status-changed',
   CHECK: 'network:check',
   CANCEL_CHECK: 'network:cancel-check',
+  RECONNECT: 'network:reconnect',
+  CANCEL_RECONNECT: 'network:cancel-reconnect',
   PREVIEW_DIAGNOSTICS: 'network:diagnostics-preview',
   EXPORT_DIAGNOSTICS: 'network:diagnostics-export',
 } as const

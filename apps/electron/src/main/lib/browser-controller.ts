@@ -1870,6 +1870,16 @@ export class BrowserController {
     await this.close(sessionId)
   }
 
+  /** 刷新受管浏览器会话的代理配置与 DNS 缓存，不中断页面、标签页或正在进行的浏览器任务。 */
+  async refreshNetworkSessions(): Promise<void> {
+    const uniqueSessions = new Set<Session>()
+    for (const record of this.sessions.values()) uniqueSessions.add(record.browserSession)
+    await Promise.allSettled([...uniqueSessions].map(async (browserSession) => {
+      await browserSession.forceReloadProxyConfig?.()
+      await browserSession.clearHostResolverCache?.().catch(() => {})
+    }))
+  }
+
   dispose(): void {
     for (const sessionId of [...this.sessions.keys()]) void this.close(sessionId)
     this.configurations.clear()

@@ -50,8 +50,71 @@ async function verify(): Promise<void> {
   await Promise.resolve()
   assert.equal((await api.getNetworkStatus()).endpoints.find(item => item.source === 'probe')?.state, 'cancelled')
   assert.equal(sender.listenerCount('destroyed'), 0)
+
+  // 显式网络重连四层契约：主窗口校验、参数校验、并发合并、取消与零远程探测
+  await assert.rejects(invokeAs(NETWORK_IPC_CHANNELS.RECONNECT, { sender, senderFrame: {} }), /主窗口/)
+  await assert.rejects(invokeAs(NETWORK_IPC_CHANNELS.CANCEL_RECONNECT, { sender, senderFrame: {} }), /主窗口/)
+  await assert.rejects(api.reconnectNetwork({ requestId: 'bad id with space' }), /重连/)
+  await assert.rejects(api.cancelNetworkReconnect('bad id with space'), /重连/)
+
+  let releaseReconnectProxy!: () => void
+  let markReconnectStarted!: () => void
+  const reconnectStarted = new Promise<void>(resolve => { markReconnectStarted = resolve })
+  state.nextReconnectProxy = () => {
+    markReconnectStarted()
+    return new Promise<void>(resolve => { releaseReconnectProxy = resolve })
+  }
+  const requestCountBeforeReconnect = state.requests.length
+  const firstReconnect = api.reconnectNetwork({ requestId: 'r1' })
+  await reconnectStarted
+  const secondReconnect = api.reconnectNetwork({ requestId: 'r2' })
+  releaseReconnectProxy()
+  const [snap1, snap2] = await Promise.all([firstReconnect, secondReconnect])
+  assert.equal(snap1.reconnect?.state, 'ready')
+  assert.equal(snap1.reconnect?.epoch, 1)
+  assert.equal(snap2.reconnect?.epoch, 1)
+  assert.deepEqual(state.reconnectCalls, {
+    invalidateProxy: 1,
+    getProxy: 1,
+    defaultProxyReload: 1,
+    defaultDnsClear: 1,
+    browserRefresh: 1,
+    mcpReconnect: 1,
+  })
+  assert.equal(state.requests.length, requestCountBeforeReconnect)
+
+  state.nextReconnectProxy = undefined
+  const noArgReconnect = await api.reconnectNetwork()
+  assert.equal(noArgReconnect.reconnect?.state, 'ready')
+  assert.equal(noArgReconnect.reconnect?.epoch, 2)
+
+  let finishSlowReconnect!: () => void
+  let markSlowStarted!: () => void
+  const slowStarted = new Promise<void>(resolve => { markSlowStarted = resolve })
+  state.nextReconnectProxy = () => {
+    markSlowStarted()
+    return new Promise<void>(resolve => { finishSlowReconnect = resolve })
+  }
+  const pendingReconnect = api.reconnectNetwork({ requestId: 'cancel-reconnect' })
+  await slowStarted
+  await api.cancelNetworkReconnect('wrong-reconnect-id')
+  assert.equal((await api.getNetworkStatus()).reconnect?.state, 'reconnecting')
+  await api.cancelNetworkReconnect('cancel-reconnect')
+  const cancelledReconnect = await pendingReconnect
+  assert.equal(cancelledReconnect.reconnect?.state, 'cancelled')
+  assert.equal(cancelledReconnect.reconnect?.epoch, 2)
+  finishSlowReconnect()
+  await Promise.resolve()
+  assert.equal((await api.getNetworkStatus()).reconnect?.state, 'cancelled')
+  assert.equal(sender.listenerCount('destroyed'), 0)
+
+  const reconnectPreview = await api.previewNetworkDiagnostics()
+  assert.equal(reconnectPreview.report.snapshot.reconnect?.state, 'cancelled')
+  assert.ok(!/private-password|private-key|example\.test|api_key/.test(JSON.stringify(reconnectPreview)))
+
   app.emit('before-quit')
   await assert.rejects(api.getNetworkStatus(), /registered/)
+  await assert.rejects(api.reconnectNetwork(), /registered/)
   console.log('network-ipc: passed')
 }
 

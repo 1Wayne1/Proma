@@ -11,7 +11,7 @@ import { DESKTOP_PREVIEW_IPC, PRESENT_IPC_CHANNELS, AGENT_MEMORY_IPC_CHANNEL, NE
 import type { TurnChangesQuery, TurnFileDiffQuery, TurnChangeRecord, TurnFileDiff, TurnChangeOwner, TurnRestoreApplyInput, TurnRestorePreview, TurnRestoreResult, RemoveWorktreeInput, RemoveWorktreeResult } from '@proma/shared'
 import type { PresentTurn, PresentedResource, PresentAction, PresentActionResult, PresentReceipt, VaultDirectoryPage, VaultLocateResult, VaultWikiResolution } from '@proma/shared'
 import type { AgentMemoryReplies, AgentMemoryRequest } from '@proma/shared'
-import type { NetworkCheckInput, NetworkDiagnosticExportResult, NetworkDiagnosticPreview, NetworkStatusSnapshot } from '@proma/shared'
+import type { NetworkCheckInput, NetworkDiagnosticExportResult, NetworkDiagnosticPreview, NetworkReconnectInput, NetworkStatusSnapshot } from '@proma/shared'
 import { IPC_CHANNELS, CHANNEL_IPC_CHANNELS, CHAT_IPC_CHANNELS, AGENT_IPC_CHANNELS, ENVIRONMENT_IPC_CHANNELS, INSTALLER_IPC_CHANNELS, PROXY_IPC_CHANNELS, GITHUB_RELEASE_IPC_CHANNELS, SYSTEM_PROMPT_IPC_CHANNELS, CHAT_TOOL_IPC_CHANNELS, FEISHU_IPC_CHANNELS, DINGTALK_IPC_CHANNELS, SLACK_IPC_CHANNELS, WECHAT_IPC_CHANNELS, AUTOMATION_IPC_CHANNELS, PLANNING_IPC_CHANNELS, VAULT_IPC_CHANNELS, AGENT_ISLAND_IPC_CHANNELS, TERMINAL_IPC_CHANNELS } from '@proma/shared'
 import { USER_PROFILE_IPC_CHANNELS, SETTINGS_IPC_CHANNELS, SCRATCH_PAD_IPC_CHANNELS, APP_ICON_IPC_CHANNELS, DOCK_BADGE_IPC_CHANNELS, STORAGE_IPC_CHANNELS } from '../types'
 import type {
@@ -588,6 +588,8 @@ export interface ElectronAPI {
   notifyNetworkOnline: (online: boolean) => Promise<NetworkStatusSnapshot>
   checkNetworkConnection: (input: NetworkCheckInput) => Promise<NetworkStatusSnapshot>
   cancelNetworkCheck: (requestId: string) => Promise<void>
+  reconnectNetwork: (input?: NetworkReconnectInput) => Promise<NetworkStatusSnapshot>
+  cancelNetworkReconnect: (requestId?: string) => Promise<void>
   onNetworkStatusChanged: (callback: (snapshot: NetworkStatusSnapshot) => void) => () => void
   previewNetworkDiagnostics: () => Promise<NetworkDiagnosticPreview>
   exportNetworkDiagnostics: (previewId: string) => Promise<NetworkDiagnosticExportResult>
@@ -1946,6 +1948,8 @@ const electronAPI: ElectronAPI = {
   notifyNetworkOnline: (online) => ipcRenderer.invoke(NETWORK_IPC_CHANNELS.NOTIFY_ONLINE, online),
   checkNetworkConnection: (input) => ipcRenderer.invoke(NETWORK_IPC_CHANNELS.CHECK, input),
   cancelNetworkCheck: (requestId) => ipcRenderer.invoke(NETWORK_IPC_CHANNELS.CANCEL_CHECK, requestId),
+  reconnectNetwork: (input) => ipcRenderer.invoke(NETWORK_IPC_CHANNELS.RECONNECT, input),
+  cancelNetworkReconnect: (requestId) => ipcRenderer.invoke(NETWORK_IPC_CHANNELS.CANCEL_RECONNECT, requestId),
   previewNetworkDiagnostics: () => ipcRenderer.invoke(NETWORK_IPC_CHANNELS.PREVIEW_DIAGNOSTICS),
   exportNetworkDiagnostics: (previewId) => ipcRenderer.invoke(NETWORK_IPC_CHANNELS.EXPORT_DIAGNOSTICS, previewId),
   onNetworkStatusChanged: (callback) => {

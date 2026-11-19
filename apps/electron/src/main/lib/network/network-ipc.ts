@@ -1,14 +1,17 @@
-import { app, dialog, ipcMain } from 'electron'
+import { app, dialog, ipcMain, session } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { NETWORK_IPC_CHANNELS } from '@proma/shared'
 import type { NetworkDiagnosticExportResult } from '@proma/shared'
+import { reconnectPiMcpNetworkConnections } from '../adapters/pi-mcp-tools'
+import { browserController } from '../browser-controller'
 import { getMainWindow } from '../main-window-store'
 import { getChannelById } from '../channel-manager'
 import { createManagedProxyFetch } from '../proxy-fetch'
-import { getEffectiveProxyUrl } from '../proxy-settings-service'
+import { getEffectiveProxyUrl, invalidateSystemProxyCache } from '../proxy-settings-service'
 import { writeTextFileAtomic } from '../safe-file'
 import { NetworkDiagnosticPreviews } from './network-diagnostics'
 import { checkNetworkOrigin, getNetworkProbeOrigin, networkMonitor } from './network-monitor'
+import { NetworkReconnectCoordinator } from './network-reconnect'
 import { waitForNetworkOperation, withNetworkAbortSignal } from './network-recovery'
 
 function assertOwner(event: IpcMainInvokeEvent): void {
@@ -18,6 +21,22 @@ function assertOwner(event: IpcMainInvokeEvent): void {
 
 export function registerNetworkIpcHandlers(): void {
   const previews = new NetworkDiagnosticPreviews()
+  const reconnector = new NetworkReconnectCoordinator({
+    monitor: networkMonitor,
+    refreshProxy: async (signal) => {
+      invalidateSystemProxyCache()
+      await waitForNetworkOperation(getEffectiveProxyUrl(), signal)
+    },
+    reloadBrowserSessions: async () => {
+      await session.defaultSession.forceReloadProxyConfig()
+      await session.defaultSession.clearHostResolverCache().catch(() => {})
+      await browserController.refreshNetworkSessions()
+    },
+    reconnectMcp: async (signal) => {
+      await waitForNetworkOperation(reconnectPiMcpNetworkConnections(), signal)
+    },
+    timeoutMs: 5_000,
+  })
   let checking: { owner: number; requestId: string; controller: AbortController } | undefined
   const handlers = Object.values(NETWORK_IPC_CHANNELS).filter(channel => channel !== NETWORK_IPC_CHANNELS.STATUS_CHANGED)
   const unsubscribe = networkMonitor.subscribe(snapshot => {
@@ -34,6 +53,37 @@ export function registerNetworkIpcHandlers(): void {
   ipcMain.handle(NETWORK_IPC_CHANNELS.CANCEL_CHECK, (event, requestId: unknown) => {
     assertOwner(event)
     if (checking?.owner === event.sender.id && checking.requestId === requestId) checking.controller.abort()
+  })
+  ipcMain.handle(NETWORK_IPC_CHANNELS.RECONNECT, async (event, input?: unknown) => {
+    assertOwner(event)
+    let requestId: string | undefined
+    if (input !== undefined) {
+      if (!input || typeof input !== 'object' || Array.isArray(input)) {
+        throw new Error('无效的网络重连请求')
+      }
+      const rawRequestId = (input as Record<string, unknown>).requestId
+      if (rawRequestId !== undefined) {
+        if (typeof rawRequestId !== 'string' || !/^[\w-]{1,80}$/.test(rawRequestId)) {
+          throw new Error('无效的网络重连请求')
+        }
+        requestId = rawRequestId
+      }
+    }
+    const ownerController = new AbortController()
+    const onDestroyed = (): void => ownerController.abort()
+    event.sender.once('destroyed', onDestroyed)
+    try {
+      return await reconnector.reconnect(event.sender.id, requestId, ownerController.signal)
+    } finally {
+      event.sender.removeListener('destroyed', onDestroyed)
+    }
+  })
+  ipcMain.handle(NETWORK_IPC_CHANNELS.CANCEL_RECONNECT, (event, requestId?: unknown) => {
+    assertOwner(event)
+    if (requestId !== undefined && (typeof requestId !== 'string' || !/^[\w-]{1,80}$/.test(requestId))) {
+      throw new Error('无效的网络重连取消请求')
+    }
+    reconnector.cancel(event.sender.id, requestId)
   })
   ipcMain.handle(NETWORK_IPC_CHANNELS.CHECK, async (event, input: unknown) => {
     assertOwner(event)
@@ -83,6 +133,7 @@ export function registerNetworkIpcHandlers(): void {
   })
   app.once('before-quit', () => {
     checking?.controller.abort()
+    reconnector.cancelAll()
     unsubscribe()
     previews.clear()
     for (const handler of handlers) ipcMain.removeHandler(handler)
