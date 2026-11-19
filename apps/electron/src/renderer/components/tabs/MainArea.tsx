@@ -70,9 +70,6 @@ export function MainArea(): React.ReactElement {
   const setPendingNavigationMap = useSetAtom(browserPendingNavigationMapAtom)
   const setAgentSidePanelTabMap = useSetAtom(agentDiffPanelTabAtom)
   const browserSessionId = activeTab?.type === 'agent' ? activeTab.sessionId : null
-  // 同一条状态会因原生视图显示/隐藏重复广播；仅新的 Agent 浏览器活动才激活对应右侧 Tab。
-  const handledBrowserActivityIdsRef = React.useRef(new Map<string, string>())
-
   const publishBrowserState = React.useCallback((state: BrowserStateChange) => {
     if ('closed' in state) {
       setBrowserOpenMap((previous) => { const next = new Map(previous); next.set(state.sessionId, false); return next })
@@ -82,20 +79,10 @@ export function MainArea(): React.ReactElement {
       return
     }
     setBrowserStateMap((previous) => { const next = new Map(previous); next.set(state.sessionId, state); return next })
-    const isMinimized = store.get(browserPanelMinimizedMapAtom).get(state.sessionId) === true
-    setBrowserOpenMap((previous) => { const next = new Map(previous); next.set(state.sessionId, !isMinimized); return next })
-
-    const activity = state.activity
-    const shouldActivateAgentBrowserTab = Boolean(
-      activity
-      && activeTab?.type === 'agent'
-      && activeTab.sessionId === state.sessionId
-      && state.agentTabId === state.activeTabId
-      && activity.tabId === state.activeTabId
-      && handledBrowserActivityIdsRef.current.get(state.sessionId) !== activity.id,
-    )
-    if (shouldActivateAgentBrowserTab) {
-      handledBrowserActivityIdsRef.current.set(state.sessionId, activity!.id)
+    // Agent 的日常浏览器活动由浮动预览呈现。首次确认仍需要完整面板中的原有告知弹窗。
+    if (state.requiresRiskAcknowledgement && browserSessionId === state.sessionId &&
+      store.get(browserPanelMinimizedMapAtom).get(state.sessionId) !== true) {
+      setBrowserOpenMap((previous) => new Map(previous).set(state.sessionId, true))
       store.set(agentSidePanelOpenAtomFamily(state.sessionId), true)
       setAgentSidePanelTabMap((previous) => {
         const next = new Map(previous)
@@ -103,7 +90,7 @@ export function MainArea(): React.ReactElement {
         return next
       })
     }
-  }, [activeTab, setAgentSidePanelTabMap, setBrowserOpenMap, setBrowserMinimizedMap, setBrowserStateMap, setPendingNavigationMap, store])
+  }, [browserSessionId, setAgentSidePanelTabMap, setBrowserOpenMap, setBrowserMinimizedMap, setBrowserStateMap, setPendingNavigationMap, store])
 
   React.useEffect(() => {
     const subscribe = (window.electronAPI as Partial<typeof window.electronAPI>).onAgentBrowserStateChanged

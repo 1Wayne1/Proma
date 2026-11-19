@@ -65,7 +65,6 @@ import {
   sendDesktopNotification,
   playNotificationSoundForType,
 } from '@/atoms/notifications'
-import { appModeAtom } from '@/atoms/app-mode'
 import { tabsAtom, activeTabIdAtom, activeSessionIdAtom, visibleAgentStreamSessionAtom, openTab, updateTabTitle } from '@/atoms/tab-atoms'
 import type { AgentStreamState } from '@/atoms/agent-atoms'
 import { agentDiffUnseenChangesAtom, agentDiffUnseenFilesAtom } from '@/atoms/agent-atoms'
@@ -673,7 +672,6 @@ export function useGlobalAgentListeners(): void {
       const result = openTab(tabs, { type: 'agent', sessionId, title: sessionTitle })
       store.set(tabsAtom, result.tabs)
       store.set(activeTabIdAtom, result.activeTabId)
-      store.set(appModeAtom, 'agent')
       store.set(currentAgentSessionIdAtom, sessionId)
       const sessions = store.get(agentSessionsAtom)
       const session = sessions.find((s) => s.id === sessionId)

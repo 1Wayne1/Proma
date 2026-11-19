@@ -22,14 +22,10 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import {
-  conversationsAtom,
-  selectedModelAtom,
   channelsAtom,
   channelsLoadedAtom,
   modelSelectorOpenAtom,
 } from '@/atoms/chat-atoms'
-import { useConversationModelOptional } from '@/hooks/useConversationSettings'
-import { useConversationIdOptional } from '@/contexts/session-context'
 import { inputToolbarControlHeightClass } from '@/components/ai-elements/input-toolbar-styles'
 import { getModelLogo, getChannelLogo, DefaultLogo } from '@/lib/model-logo'
 import { cn } from '@/lib/utils'
@@ -129,10 +125,6 @@ export function ModelSelector({
   excludedProviders,
   useSharedOpenState = false,
 }: ModelSelectorProps = {}): React.ReactElement {
-  const [conversationModel, setConversationModel] = useConversationModelOptional()
-  const conversationId = useConversationIdOptional()
-  const setConversations = useSetAtom(conversationsAtom)
-  const setGlobalModel = useSetAtom(selectedModelAtom)
   const channels = useAtomValue(channelsAtom)
   const channelsLoaded = useAtomValue(channelsLoadedAtom)
   const setChannels = useSetAtom(channelsAtom)
@@ -143,8 +135,7 @@ export function ModelSelector({
   const [tooltipOpen, setTooltipOpen] = React.useState(false)
   const [search, setSearch] = React.useState('')
 
-  // 外部模型优先 → per-conversation 模型
-  const selectedModel = externalSelectedModel !== undefined ? externalSelectedModel : conversationModel
+  const selectedModel = externalSelectedModel ?? null
 
   // 每次打开 Popover 时刷新渠道列表，确保最新
   React.useEffect(() => {
@@ -225,32 +216,10 @@ export function ModelSelector({
     if (open || !displayModelInfo) setTooltipOpen(false)
   }, [displayModelInfo, open])
 
-  /** 选择模型并持久化到当前对话 */
+  /** 选择模型 */
   const handleSelect = (option: ModelOption): void => {
-    if (onModelSelect) {
-      onModelSelect(option)
-      setOpen(false)
-      return
-    }
-
-    // Chat 模式：写入 per-conversation Map + 同步全局默认值
-    if (setConversationModel) {
-      setConversationModel({ channelId: option.channelId, modelId: option.modelId })
-    }
-    setGlobalModel({ channelId: option.channelId, modelId: option.modelId })
+    onModelSelect?.(option)
     setOpen(false)
-
-    // 将模型/渠道选择保存到当前对话元数据
-    if (conversationId) {
-      window.electronAPI
-        .updateConversationModel(conversationId, option.modelId, option.channelId)
-        .then((updated) => {
-          setConversations((prev) =>
-            prev.map((c) => (c.id === updated.id ? updated : c))
-          )
-        })
-        .catch(console.error)
-    }
   }
 
   /** 搜索框键盘导航 */

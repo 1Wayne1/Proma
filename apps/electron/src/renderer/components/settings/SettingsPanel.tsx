@@ -17,7 +17,7 @@ import {
   Palette,
   Info,
   Globe,
-  BookOpen,
+  History,
   Bot,
   GraduationCap,
   ArrowLeft,
@@ -57,7 +57,7 @@ import { GeneralSettings } from "./GeneralSettings";
 import { ProxySettings } from "./ProxySettings";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { AboutSettings } from "./AboutSettings";
-import { PromptSettings } from "./PromptSettings";
+import { LegacyChatSettings } from "./LegacyChatSettings";
 import { BotHubSettings } from "./BotHubSettings";
 import { ShortcutSettings } from "./ShortcutSettings";
 import { VoiceInputSettings } from "./VoiceInputSettings";
@@ -78,7 +78,6 @@ const BASE_TABS: TabItem[] = [
   { id: "general", label: "通用设置", icon: <Settings size={16} /> },
   { id: "channels", label: "模型配置", icon: <Radio size={16} /> },
   { id: "vision-relay", label: "视觉助手", icon: <Eye size={16} /> },
-  { id: "prompts", label: "提示词管理", icon: <BookOpen size={16} /> },
   { id: "proxy", label: "代理设置", icon: <Globe size={16} /> },
 ];
 
@@ -104,6 +103,7 @@ const VOICE_INPUT_TAB: TabItem = {
 };
 /** 尾部 Tabs */
 const TAIL_TABS: TabItem[] = [
+  { id: "legacy-chat", label: "历史 Chat", icon: <History size={16} /> },
   { id: "migration", label: "数据迁移", icon: <HardDriveDownload size={16} /> },
   { id: "storage", label: "磁盘管理", icon: <HardDrive size={16} /> },
   { id: "appearance", label: "外观设置", icon: <Palette size={16} /> },
@@ -120,8 +120,8 @@ function renderTabContent(tab: SettingsTab): React.ReactElement {
       return <ChannelSettings />;
     case "vision-relay":
       return <VisionRelaySettings />;
-    case "prompts":
-      return <PromptSettings />;
+    case "legacy-chat":
+      return <LegacyChatSettings />;
     case "proxy":
       return <ProxySettings />;
     case "appearance":

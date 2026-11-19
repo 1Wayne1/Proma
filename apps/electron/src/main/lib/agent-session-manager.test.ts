@@ -689,48 +689,6 @@ describe('Agent 会话删除墓碑', () => {
 })
 
 describe('S7 旧数据往返兼容', () => {
-  test('旧 Chat 以 BOM、CRLF 和损坏行保存时，可以读可用消息，修改前会检查完整性', async () => {
-    const chat = await import('./conversation-manager')
-    const paths = await import('./config-paths')
-    const meta = chat.createConversation('旧对话')
-    const file = paths.getConversationMessagesPath(meta.id)
-    const first = { id: 'one', role: 'user' as const, content: '早期消息', createdAt: 1 }
-    const second = { id: 'two', role: 'assistant' as const, content: '回复', createdAt: 2, legacyTag: '保留' }
-    const original = '\uFEFF' + JSON.stringify(first) + '\r\n{损坏}\r\n' + JSON.stringify(second)
-    writeFileSync(file, original)
-    expect(chat.getConversationMessages(meta.id)).toEqual([first, second])
-    expect(chat.getRecentMessages(meta.id, 2)).toEqual({ messages: [first, second], total: 2, hasMore: false })
-    expect(() => chat.deleteMessage(meta.id, 'one')).toThrow('已保留')
-    expect(() => chat.truncateMessagesFrom(meta.id, 'two')).toThrow('已保留')
-    expect(() => manager.migrateChatToAgentSession(meta.id, 'unused')).toThrow('已保留')
-    expect(readFileSync(file, 'utf8')).toBe(original)
-    chat.appendMessage(meta.id, { ...first, id: 'three', role: 'user' })
-    expect(readFileSync(file, 'utf8').startsWith(original + '\n')).toBe(true)
-    expect(chat.getConversationMessages(meta.id).map(row => row.id)).toEqual(['one', 'two', 'three'])
-  })
-
-  test('重复导入旧 Chat 到同一 Agent 会话只补新增消息，原 Chat 与已有 Agent 历史可继续读取', async () => {
-    const chat = await import('./conversation-manager')
-    const paths = await import('./config-paths')
-    const source = chat.createConversation('旧 Chat')
-    const target = 'import-target'
-    writeAgentSessionsIndex([{ ...createIndexedSessions(1)[0]!, id: target, agentRuntime: 'pi' }])
-    writeAgentSessionJsonl(target, [JSON.stringify({ type: 'assistant', uuid: 'existing', message: { content: [] } })])
-    const targetPath = paths.getAgentSessionMessagesPath(target)
-    const prior = readFileSync(targetPath, 'utf8')
-    chat.appendMessage(source.id, { id: 'row-a', role: 'user', content: '旧正文', createdAt: 1 })
-    const original = readFileSync(paths.getConversationMessagesPath(source.id), 'utf8')
-    manager.migrateChatToAgentSession(source.id, target)
-    const once = readFileSync(targetPath, 'utf8')
-    expect(once.startsWith(prior)).toBe(true)
-    manager.migrateChatToAgentSession(source.id, target)
-    expect(readFileSync(targetPath, 'utf8')).toBe(once)
-    expect(readFileSync(paths.getConversationMessagesPath(source.id), 'utf8')).toBe(original)
-    chat.appendMessage(source.id, { id: 'row-b', role: 'assistant', content: '新正文', createdAt: 2 })
-    manager.migrateChatToAgentSession(source.id, target)
-    expect(manager.getAgentSessionSDKMessages(target).map(message => message.type)).toEqual(['assistant', 'user', 'assistant'])
-  })
-
   test('旧 Agent 索引迁移后的日常保存仍能找到逐字节原件，更高版本索引保留原样', async () => {
     const { createHash } = await import('node:crypto')
     const { getAgentSessionsIndexPath } = await import('./config-paths')
@@ -746,26 +704,6 @@ describe('S7 旧数据往返兼容', () => {
     writeFileSync(file, future)
     expect(() => manager.listAgentSessions()).toThrow('版本')
     expect(readFileSync(file, 'utf8')).toBe(future)
-  })
-
-  test('更新同名 Chat 工具保留开关、未知配置与凭据，损坏配置拒绝写回', async () => {
-    const tools = await import('./chat-tool-config')
-    const { getChatToolsConfigPath } = await import('./config-paths')
-    const file = getChatToolsConfigPath()
-    const tool = { id: 'custom-a', name: 'A', description: '原名', category: 'custom' as const, params: [], executorType: 'http' as const }
-    const other = { ...tool, id: 'custom-b' }
-    const old = { unknownLegacy: { theme: 'old' }, toolStates: { 'custom-a': { enabled: true, oldSetting: 7 } },
-      toolCredentials: { 'old-search': { key: 'synthetic' } }, customTools: [{ ...tool, legacyFormat: 1 }, other] }
-    writeFileSync(file, '\uFEFF' + JSON.stringify(old))
-    tools.addCustomTool({ ...tool, description: '新说明' })
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ ...old, customTools: [{ ...tool, legacyFormat: 1, description: '新说明' }, other] })
-    tools.updateToolState(tool.id, { enabled: false })
-    expect(JSON.parse(readFileSync(file, 'utf8')).toolStates[tool.id]).toEqual({ enabled: false, oldSetting: 7 })
-    for (const text of ['{broken', '{"customTools":{}}']) {
-      writeFileSync(file, text)
-      expect(() => tools.addCustomTool(tool)).toThrow('保留原文件')
-      expect(readFileSync(file, 'utf8')).toBe(text)
-    }
   })
 
   test('升级已启用和已停用的默认 Skill 时保留用户选择，再次启动可继续使用', async () => {

@@ -1,16 +1,7 @@
 /**
- * Chat 模块导出索引
+ * 跨视图复用的基础组件导出索引（模型选择器、复制按钮、用户头像）
  */
 
-export * from './ChatView'
-export * from './ChatHeader'
-export * from './ChatMessages'
-export * from './ChatMessageItem'
-export * from './ChatInput'
 export * from './ModelSelector'
 export * from './CopyButton'
-export * from './DeleteMessageDialog'
-export * from './ClearContextButton'
-export * from './ContextSettingsPopover'
-export * from './ParallelChatMessages'
-export * from './PromptEditorSidebar'
+export * from './UserAvatar'

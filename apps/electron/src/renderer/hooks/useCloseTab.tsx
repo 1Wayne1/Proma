@@ -4,15 +4,14 @@
  * 被 TabBar（×按钮/中键）和 GlobalShortcuts（Cmd+W）共用，
  *
  * 关键行为：
- * - 关闭当前会话入口只回到 Scratch Pad，不停止后台 Agent
+ * - 关闭当前会话入口只回到空白欢迎区，不停止后台 Agent
  * - 运行中或阻塞中的会话继续通过左侧状态 indicator 恢复
  * - idle 状态的 Agent 会话在用户主动关闭 Tab 时清除完成提醒状态
  * - 真正删除/归档时由侧边栏路径负责清理 per-session 状态
  */
 
 import * as React from 'react'
-import { useAtom, useSetAtom } from 'jotai'
-import { useStore } from 'jotai'
+import { useAtom, useSetAtom, useStore } from 'jotai'
 import {
   tabsAtom,
   activeTabIdAtom,
@@ -25,7 +24,6 @@ import {
   agentSessionIndicatorMapAtom,
   unviewedCompletedSessionIdsAtom,
 } from '@/atoms/agent-atoms'
-import { agentSideChatMapAtom } from '@/atoms/chat-atoms'
 import { useSyncActiveTabSideEffects } from '@/hooks/useSyncActiveTabSideEffects'
 
 interface UseCloseTabReturn {
@@ -43,7 +41,6 @@ export function useCloseTab(): UseCloseTabReturn {
   const setUnviewedCompleted = useSetAtom(unviewedCompletedSessionIdsAtom)
   const setAgentSessions = useSetAtom(agentSessionsAtom)
   const setViewStateMap = useSetAtom(sessionViewStateMapAtom)
-  const setSideChatMap = useSetAtom(agentSideChatMapAtom)
 
   const clearIdleAgentCompletionNotice = React.useCallback((sessionId: string) => {
     const indicatorMap = store.get(agentSessionIndicatorMapAtom)
@@ -55,7 +52,7 @@ export function useCloseTab(): UseCloseTabReturn {
     window.electronAPI.clearAgentCompletionState(sessionId)
       .then((updated) => {
         setAgentSessions((prev) =>
-          prev.map((s) => (s.id === updated.id ? updated : s))
+          prev.map((s) => (s.id === updated.id ? updated : s)),
         )
       })
       .catch(console.error)
@@ -95,27 +92,6 @@ export function useCloseTab(): UseCloseTabReturn {
           return next
         })
       }
-
-      if (closingTab.type === 'agent') {
-        setSideChatMap((prev) => {
-          if (!prev.has(closingTab.sessionId)) return prev
-          const next = new Map(prev)
-          next.delete(closingTab.sessionId)
-          return next
-        })
-      } else if (closingTab.type === 'chat') {
-        setSideChatMap((prev) => {
-          let changed = false
-          const next = new Map(prev)
-          for (const [ownerSessionId, conversationId] of next) {
-            if (conversationId === closingTab.sessionId) {
-              next.delete(ownerSessionId)
-              changed = true
-            }
-          }
-          return changed ? next : prev
-        })
-      }
     }
 
     if (wasActive) {
@@ -129,7 +105,7 @@ export function useCloseTab(): UseCloseTabReturn {
     if (closingTab && closingTab.type === 'agent') {
       clearIdleAgentCompletionNotice(closingTab.sessionId)
     }
-  }, [tabs, activeTabId, setTabs, setActiveTabId, setViewStateMap, setSideChatMap, syncActiveTabSideEffects, clearIdleAgentCompletionNotice])
+  }, [tabs, activeTabId, setTabs, setActiveTabId, setViewStateMap, syncActiveTabSideEffects, clearIdleAgentCompletionNotice])
 
   const requestClose = React.useCallback((tabId: string) => {
     executeClose(tabId)

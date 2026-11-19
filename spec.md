@@ -2,13 +2,13 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | 1.0.25 |
+| 文档版本 | 1.0.26 |
 | 制定日期 | 2026-11-16 |
-| 状态 | M1、S5、S6 桌面窗口主流程及 S7 新装、覆盖升级、Automation 和 Collaboration 已通过 macOS arm64 实机验收。Pi 已升级至 `1.5.2`。macOS `0.22.80` 差异移植已在工作区完成显式网络重连（`0.19.87`）与旧 Chat 兼容入口调查。多屏 DPI、正式发布和 Windows 完整验收待完成 |
+| 状态 | M1、S5、S6 桌面窗口主流程及 S7 新装、覆盖升级、Automation 和 Collaboration 已通过 macOS arm64 实机验收。Pi 已升级至 `1.5.2`。macOS `0.22.80` 差异移植已在工作区完成显式网络重连、完整 Chat 模式移除及只读「历史 Chat」兼容入口与设置 UI。多屏 DPI、正式发布和 Windows 完整验收待完成 |
 | 开发分支 | `dev/new-version-features` |
 | 源码基线 | 桌面应用 `0.19.58`；提交 `86d9dfb511db4c1e3ffded3b6c3e312996f50cbf` |
 | 参考安装版 | `D:\Program Files\Proma`，桌面应用 `0.22.80`（macOS 差异对照目标 `/Applications/Proma.app/Contents/Resources/app.asar`，同为 `0.22.80`） |
-| 当前版本 | 提交基线 `dcdf68e9` 为桌面应用 `0.19.83`、Pi `1.5.2`、共享包 `0.1.81`；当前工作区迭代已推进至桌面应用 `0.19.87`、共享包 `0.1.83`。此前的 S7 macOS 补验基线为 `10b98fb7`（桌面应用 `0.19.82`，Pi `0.87.1`） |
+| 当前版本 | 提交基线 `dcdf68e9` 为桌面应用 `0.19.83`、Pi `1.5.2`、共享包 `0.1.81`；当前工作区未提交迭代已推进至桌面应用 `0.19.88`、共享包 `0.1.84`。此前的 S7 macOS 补验基线为 `10b98fb7`（桌面应用 `0.19.82`，Pi `0.87.1`） |
 | 首要平台 | Windows；共享逻辑需维持 macOS/Linux 的既有能力 |
 | 接手入口 | [当前交接记录](docs/plans/2026-11-17-local-upgrade-handoff.md)，包含 M1、S5—S7 的 macOS 验收结果 |
 
@@ -963,3 +963,31 @@ S6-02 基线为 `755dbc1b`。桌面应用 `0.19.79` 更新了 `knowledge-mainten
   2. 对含局部坏行或超大历史的对话按字节/行数有界导出为 `untrustedData` 工作台快照（`migrateChatToAgentSession` 严格校验遇坏行拒绝，且直接写入 Agent 会话消息）；
   3. 将 `chat-tools.json` 自定义 HTTP 工具剥离常量与凭据后导出为脱敏清单供 Agent 转为 Skill（社区版尚无对应实现）。
 - 额外观察：正式版 `legacy-chat-ipc.ts` 未对 `event.sender` / `mainFrame` 做主窗口归属校验；若后续确认实施，社区版须保留现有 Chat UI、补齐主窗口/主 frame 校验、原子写、原文件只读及坏行/重复执行测试。
+
+## 37. 移除完整 Chat 模式并补齐历史 Chat 只读兼容入口（2026-11-19）
+
+根据用户明确指令「不再保留完整 Chat 模式与现有入口，直接参照正式版补齐上述缺口，UI 与正式版保持一致」，在工作区将桌面应用推进至 `0.19.88`、`@proma/shared` 推进至 `0.1.84` 并同步 `bun.lock`，严格保留此前所有未提交改动（`network-reconnect*`、`agent-memory*`、`BundledReleaseNotesDialog.tsx`、`AgentFloatingPreviews.tsx` 等），且不接入任何 Proma 云服务。
+
+### 37.1 移除完整 Chat 模式并收敛至 Pi Agent
+
+- **共享契约（`packages/shared`）**：从 `packages/shared/src/types/chat.ts` 移除 `CHAT_IPC_CHANNELS`（保留跨模块复用的 `ChatMessage`、`FileAttachment`、`ModelOption`、`MAX_ATTACHMENT_SIZE`、`FileDialog*`）；从 `packages/shared/src/types/agent.ts` 移除 `MIGRATE_CHAT_TO_AGENT`；删除 `chat-tool.ts` 与 `system-prompt.ts`；新增 `attachments.ts`（`ATTACHMENT_IPC_CHANNELS`：`attachment:read`、`attachment:save-image-as`、`attachment:save-resource-file-as`、`attachment:open-file-dialog`）和 `legacy-chat.ts`。
+- **主进程与 Preload**：移除 `chat-service.ts`、`conversation-manager.ts`、`chat-tool-config.ts`、`chat-tool-executor.ts`、`chat-tool-registry.ts`、`chat-tools-watcher.ts`、`chat-tools/`、`system-prompt-manager.ts`、`agent-session-manager.ts#migrateChatToAgentSession` 与 `ipc.ts` 中的 Chat / Chat 工具 / 系统提示词 / `MIGRATE_CHAT_TO_AGENT` 及自动归档逻辑；仅保留 4 个通用附件/资源保存通道并切换至 `ATTACHMENT_IPC_CHANNELS`；`settings.ts`、`tray.ts`、`index.ts` 及 `preload/index.ts` 收敛为仅 Agent 模式。
+- **渲染进程与会话预填**：删除 `ChatView.tsx`、`ChatInput.tsx`、`ModeSwitcher.tsx`、`PromptSettings.tsx`、`app-mode.ts`、`chat-tool-atoms.ts`、`system-prompt-atoms.ts`、`useGlobalChatListeners.ts`、`useConversationSettings.ts`、`side-chat.ts`、`session-context.tsx` 等全部 Chat 专属视图与状态；提取 `lib/format-message-time.ts` 供 Agent 消息组件复用；收敛 `AppShell`、`TabBar`、`TabContent`、`TabSwitcher`、`LeftSidebar`、`RightSidePanel`、`SearchDialog`、`GlobalShortcuts`、`ShortcutGuideDialog`、`QuickTaskApp` 等入口为仅 Agent；`atoms/agent-atoms.ts` 新增按会话隔离的 `agentPendingPromptMapAtom` / `agentPendingPromptAtomFamily(sessionId)` 供 `AgentView.tsx` 精确消费本会话预填提示词。
+- **既有测试更新**：移除 `apps/electron/src/main/lib/agent-session-manager.test.ts` 中 3 条引用已删除 `conversation-manager`、`chat-tool-config` 和 `migrateChatToAgentSession` 的旧 Chat 测试，保留 Agent v2 索引迁移与默认 Skill 升级测试。
+
+### 37.2 `0.22.80` 对齐的只读「历史 Chat」兼容实现
+
+- **只读服务端（`apps/electron/src/main/lib/legacy-chat-service.ts`）**：
+  - `getSummary()` / `listHistory()` / `prepareSession()` 全程不修改、不创建 `~/.proma/conversations.json`、`conversations/*.jsonl` 与 `chat-tools.json`。
+  - 剥离 UTF-8 BOM、校验路径/符号链接/硬链接（`nlink === 1`）及读写前 `dev`/`ino` 一致性，对缺失/损坏文件或条目容错降级。
+  - `prepareSession()` 先校验目标 Pi 会话 UUID、归属工作区、非 `isSessionDeleting`、非 `legacyTranscript`（只读旧 Claude 会话）及所选 `conversationId` 存在性后再建目录，避免失败留下空快照目录；消息导出流式按 `LEGACY_CHAT_LIMITS`（单索引/会话 `8 MiB`、总历史 `64 MiB`、单行 `256 KiB`、单会话 `10,000` 条、附件元数据上限 `100` 项）裁剪并标注 `untrustedData: true`；自定义工具忽略内置工具，递归剥离 `toolCredentials` 与 HTTP `urlTemplate` / `headers` / `bodyTemplate` 常量为 `[已省略配置值]` 和环境变量占位符，常量超限时触发 fail-closed（`metadataOmittedForSafety: true`），全部快照由 `writeTextFileAtomic` 原子写入 `<configDir>/agent-workspaces/<slug>/<sessionId>/legacy-chat-<kind>/snapshot-<uuid>/`。
+- **主窗口 IPC 与 Preload（`legacy-chat-ipc.ts`、`preload/index.ts`）**：注册 `legacy-chat:get-summary`、`legacy-chat:list-history`、`legacy-chat:prepare-session`，强制校验 `getMainWindow()?.webContents === event.sender` 与 `event.senderFrame === event.sender.mainFrame`，校验 `sessionId` / `kind` / `conversationId` 类型，并在 `app.once('before-quit', cleanup)` 注销全部 handler；`preload/index.ts` 暴露 `getLegacyChatSummary`、`listLegacyChats`、`prepareLegacyChatSession`。
+- **设置页 UI 与交互辅助（`SettingsPanel.tsx`、`settings-tab.ts`、`LegacyChatSettings.tsx`、`legacy-chat-helpers.ts`）**：在「数据迁移」前新增「历史 Chat」设置标签页，提供摘要概览双栏卡片（「历史 Chat 记录」「自定义 Chat 工具」）、防抖标题搜索（200ms）、归档筛选（`all` / `active` / `archived`）、20 条/页分页、`reconcileLegacyChatEntry` 状态校正与 `runLegacyChatPreparation` 幂等准备新 Pi Agent 会话并预填带安全边界及本地设备语义的提示词。
+
+### 37.3 校验与测试结果（`0.19.88` / shared `0.1.84`）
+
+- 新增 BDD 测试：`apps/electron/src/main/lib/legacy-chat-service.test.ts`（6 项，覆盖 missing 不建目录、BOM/坏索引过滤排序分页与非法参数、坏行/CRLF/超长行/超限附件/缺失 JSONL、拒绝只读或删除中会话且无空目录残留、符号链接/硬链接拦截、自定义工具常量与凭据脱敏及 fail-closed、原始文件逐字节及 `mtimeMs`/`ino` 不变）、`apps/electron/src/main/lib/legacy-chat-ipc.test.ts` + `fixtures/legacy-chat-ipc-{build,stubs,probe}.ts`（真实 `preload/index.ts` 四层 IPC、主窗口/主 frame 校验、参数校验、`before-quit` 注销与已移除 API 检查）及 `apps/electron/src/renderer/components/settings/legacy-chat-helpers.test.ts`（5 项）。
+- `bun run typecheck`：6 个工作区（`@proma/shared`、`@proma/session-core`、`@proma/core`、`@proma/ui`、`@proma/cli`、`@proma/electron`）全部通过。
+- `bun test --parallel=4`（沙箱内）：117 个文件共 742 项测试中 735 项通过；仅 `apps/electron/src/main/lib/adapters/pi-mcp-recovery.test.ts` 中 7 项本地回环 HTTP 用例因沙箱禁止 `127.0.0.1` 请求返回 `EPERM`。在允许回环请求下单独重跑 `pi-mcp-recovery.test.ts`，9 项（含全部 7 项回环恢复及显式重连用例）全部通过。
+- `bun run electron:build`（设置 `CLANG_MODULE_CACHE_PATH` / `SWIFT_MODULE_CACHE_PATH`）：退出码 0，完成 `main.cjs`、`agent-runtime.cjs`、`terminal-runtime.cjs`、`preload.cjs`、`vite build`、`proma` CLI 及 macOS 原生 helper 编译。
+- `git diff --check` 通过；静态检索确认已移除 `CHAT_IPC_CHANNELS`、`CHAT_TOOL_IPC_CHANNELS`、`SYSTEM_PROMPT_IPC_CHANNELS`、`ModeSwitcher`、`MIGRATE_CHAT_TO_AGENT`、`PromptSettings`，新增文件无 `any` 与 Proma 云接入。未做 macOS 桌面应用界面交互点击冒烟（由单测、IPC 构建探针与 `electron:build` 覆盖静态与契约验证）。

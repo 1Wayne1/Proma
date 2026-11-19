@@ -81,7 +81,7 @@ import {
   agentSessionChannelMapAtom,
   agentSessionModelMapAtom,
   currentAgentWorkspaceIdAtom,
-  agentPendingPromptAtom,
+  agentPendingPromptAtomFamily,
   agentPendingFilesAtomFamily,
   agentMessageQueueAtomFamily,
   agentWorkspacesAtom,
@@ -528,7 +528,7 @@ export function AgentView({ sessionId, embedded = false }: AgentViewProps): Reac
   const currentWorkspaceId = React.useMemo(() => {
     return sessionMeta?.workspaceId ?? globalWorkspaceId
   }, [sessionMeta?.workspaceId, globalWorkspaceId])
-  const [pendingPrompt, setPendingPrompt] = useAtom(agentPendingPromptAtom)
+  const [pendingPrompt, setPendingPrompt] = useAtom(agentPendingPromptAtomFamily(sessionId))
   const [pendingFiles, setPendingFiles] = useAtom(agentPendingFilesAtomFamily(sessionId))
   const [queuedMessages, setQueuedMessages] = useAtom(agentMessageQueueAtomFamily(sessionId))
   const workspaces = useAtomValue(agentWorkspacesAtom)

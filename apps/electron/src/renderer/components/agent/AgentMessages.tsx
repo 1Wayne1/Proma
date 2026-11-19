@@ -22,7 +22,7 @@ import {
 import { ScrollMinimap } from '@/components/ai-elements/scroll-minimap'
 import type { MinimapItem } from '@/components/ai-elements/scroll-minimap'
 import { useStickToBottomContext } from 'use-stick-to-bottom'
-import { formatMessageTime } from '@/components/chat/ChatMessageItem'
+import { formatMessageTime } from '@/lib/format-message-time'
 import { resolveModelDisplayName } from '@/lib/model-logo'
 import { userProfileAtom } from '@/atoms/user-profile'
 import { tabMinimapCacheAtom } from '@/atoms/tab-atoms'

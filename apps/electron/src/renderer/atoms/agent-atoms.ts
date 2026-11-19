@@ -426,7 +426,44 @@ export const agentLiveMessagesAtomFamily = atomFamily((sessionId: string) =>
   atom((get) => get(liveMessagesMapAtom).get(sessionId) ?? EMPTY_LIVE_SDK_MESSAGES),
 )
 
-export const agentPendingPromptAtom = atom<AgentPendingPrompt | null>(null)
+/** Agent 会话待预填提示词 Map — 按 sessionId 隔离，避免并发预填互相覆盖 */
+export const agentPendingPromptMapAtom = atom<Map<string, AgentPendingPrompt>>(new Map())
+
+/** 单个 Agent 会话的待预填提示词切片 */
+export const agentPendingPromptAtomFamily = atomFamily((sessionId: string) =>
+  atom(
+    (get) => get(agentPendingPromptMapAtom).get(sessionId) ?? null,
+    (_get, set, prompt: AgentPendingPrompt | null) => {
+      set(agentPendingPromptMapAtom, (prev) => {
+        const map = new Map(prev)
+        if (!prompt) {
+          map.delete(sessionId)
+        } else {
+          map.set(prompt.sessionId, prompt)
+        }
+        return map
+      })
+    },
+  ),
+)
+
+/** 写入待预填提示词的兼容入口（按 prompt.sessionId 写入 Map） */
+export const agentPendingPromptAtom = atom(
+  (get): AgentPendingPrompt | null => {
+    const first = get(agentPendingPromptMapAtom).values().next()
+    return first.done ? null : first.value
+  },
+  (_get, set, prompt: AgentPendingPrompt | null) => {
+    set(agentPendingPromptMapAtom, (prev) => {
+      if (!prompt) {
+        return prev.size === 0 ? prev : new Map()
+      }
+      const map = new Map(prev)
+      map.set(prompt.sessionId, prompt)
+      return map
+    })
+  },
+)
 
 /**
  * Agent 待发送文件列表 Map — 以 sessionId 为 key
@@ -701,7 +738,7 @@ export function getDelegationTabLabel(title: string | null | undefined): string 
   return title?.trim() || '委派任务'
 }
 
-export type AgentSidePanelBaseTab = 'files' | 'changes' | 'chat' | 'temporary-agent' | 'delegation' | WorkspaceComponentTab
+export type AgentSidePanelBaseTab = 'files' | 'changes' | 'temporary-agent' | 'delegation' | WorkspaceComponentTab
 /** 工作区组件、每个 Pi 探索分支、协作子 Agent、浏览器网页和文件预览都处于右侧工作区顶栏。 */
 export type AgentSidePanelTab = AgentSidePanelBaseTab | `exploration:${string}` | `browser:${string}` | `preview:${string}` | `terminal:${string}`
 

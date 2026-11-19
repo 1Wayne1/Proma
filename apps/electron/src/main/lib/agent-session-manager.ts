@@ -46,7 +46,6 @@ import type {
   SessionWorkbenchLayout,
 } from '@proma/shared'
 import { isCodexSpeed, migratePermissionMode, mergeSkillActivations, findBestSearchMatch, insertTopSearchResult } from '@proma/shared'
-import { getCompleteConversationMessages } from './conversation-manager'
 // 旧格式 → SDKMessage 的转换逻辑下沉到 @proma/session-core 作为唯一真源，避免主进程与渲染层各存一份。
 import { convertLegacyMessage } from '@proma/session-core'
 import { assertEnabledModelForChannel } from './agent-model-selection'
@@ -825,49 +824,6 @@ export function moveSessionToWorkspace(sessionId: string, targetWorkspaceId: str
 
   console.log(`[Agent 会话] 已迁移会话及子会话到工作区: ${updatedRoot.title}（${movedCount} 个）→ ${targetWs.name}`)
   return updatedRoot
-}
-
-/**
- * 迁移 Chat 对话记录到 Agent 会话
- *
- * 读取 Chat 对话的消息，转换为 AgentMessage 格式，
- * 追加到目标 Agent 会话的 JSONL 文件中。
- *
- * 仅迁移 user 和 assistant 角色的消息文本内容，
- * 工具活动、推理、附件等 Chat 特有字段不迁移。
- */
-export function migrateChatToAgentSession(conversationId: string, agentSessionId: string): void {
-  const chatMessages = getCompleteConversationMessages(conversationId)
-
-  if (chatMessages.length === 0) {
-    console.log(`[Agent 会话] Chat 对话无消息，跳过迁移 (${conversationId})`)
-    return
-  }
-
-  const target = getAgentSessionMeta(agentSessionId)
-  if (!target || isAgentSessionDeleting(agentSessionId)) throw new Error('目标 Agent 会话不可用')
-  if (target.legacyTranscript) throw new Error('历史会话为只读，请选择 Pi 会话')
-  const path = getAgentSessionMessagesPath(agentSessionId)
-  const previous = existsSync(path) ? readFileSync(path, 'utf8') : ''
-  interface ImportedMessage extends AgentMessage {
-    chatImport: { version: 1; conversationId: string; messageId: string }
-  }
-  const existing = parseJsonlStrict<Partial<ImportedMessage> | null>(previous.split('\n').filter(line => line.trim()), '读取迁移目标')
-  const imported = new Set(existing.flatMap(row => row?.chatImport?.version === 1 && row.chatImport.conversationId === conversationId
-    ? [row.chatImport.messageId] : []))
-  const additions: ImportedMessage[] = []
-  for (const cm of chatMessages) {
-    if ((cm.role !== 'user' && cm.role !== 'assistant') || !cm.content.trim() || imported.has(cm.id)) continue
-    additions.push({ id: randomUUID(), role: cm.role, content: cm.content, createdAt: cm.createdAt,
-      model: cm.role === 'assistant' ? cm.model : undefined,
-      chatImport: { version: 1, conversationId, messageId: cm.id } })
-    imported.add(cm.id)
-  }
-  if (!additions.length) return
-  const separator = previous && !previous.endsWith('\n') ? '\n' : ''
-  writeTextFileAtomic(path, previous + separator + additions.map(message => JSON.stringify(message)).join('\n') + '\n')
-  updateAgentSessionMeta(agentSessionId, { archived: false })
-  console.log(`[Agent 会话] 已导入 ${additions.length} 条 Chat 消息`)
 }
 
 /**
