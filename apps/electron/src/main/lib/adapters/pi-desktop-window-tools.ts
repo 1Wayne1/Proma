@@ -36,7 +36,13 @@ const consent: WindowConsent = {
   },
 }
 const observeParams = Type.Object({ app: Type.String({ minLength: 1, maxLength: 100 }), screenshot: Type.Optional(Type.Boolean()), preview: Type.Optional(Type.Boolean()) }, { additionalProperties: false })
-const actionParams = Type.Object({ reference: Type.String({ pattern: '^[a-f0-9-]{36}$' }), value: Type.Optional(Type.String({ maxLength: 512, pattern: '^[^\\x00-\\x1f\\x7f\\u202a-\\u202e\\u2066-\\u2069]*$' })) }, { additionalProperties: false })
+const actionParams = Type.Object({
+  reference: Type.String({ pattern: '^[a-f0-9-]{36}$' }),
+  value: Type.Optional(Type.Union([
+    Type.Null(),
+    Type.String({ maxLength: 512, pattern: '^[^\\x00-\\x1f\\x7f\\u202a-\\u202e\\u2066-\\u2069]*$' }),
+  ], { description: '点击时传 null，填写时传文本，空字符串表示清空。' })),
+}, { additionalProperties: false })
 
 interface DesktopRuntime {
   connect(signal: AbortSignal): Promise<DriverConnection>
@@ -107,10 +113,10 @@ export function buildPiDesktopWindowTools(access: (PromaSelfForegroundAccess & {
       return { content: [{ type: 'text' as const, text: JSON.stringify(result) }, ...(image ? [{ type: 'image' as const, mimeType: 'image/png', data: image }] : [])], details: {} }
     }),
   }, {
-    name: 'DesktopWindowAct', label: '操作桌面控件', description: '使用刚观察到的控件引用。省略 value 表示点击，提供 value 表示填写。每次需用户确认，操作后重新观察。', parameters: actionParams,
+    name: 'DesktopWindowAct', label: '操作桌面控件', description: '使用刚观察到的控件引用。点击时传 value: null，填写时传文本，空字符串表示清空。每次需用户确认，操作后重新观察。', parameters: actionParams,
     execute: (_id, args, signal) => execute(signal, async current => {
       if (!Check(actionParams, args) || !session) throw new Error('请先观察目标窗口并使用当前引用')
-      await session.act(args.reference, args.value, current)
+      await session.act(args.reference, args.value ?? undefined, current)
       release()
       return { content: [{ type: 'text' as const, text: '已提交操作，请重新观察以确认结果。' }], details: {} }
     }),

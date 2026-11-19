@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
-import { connectDriver } from './transport'
+import { connectDriver, driverMcpArguments } from './transport'
 
 /** 用真实管道模拟不同的 MCP 服务端响应，不需桌面权限或安装驱动。 */
 function fixture(response: string) {
@@ -29,6 +29,11 @@ test('等待驱动响应时撤权会拒绝请求并退出私有子进程', async
     await expect(pending).rejects.toThrow('取消')
     await stopped
   } finally { child.kill() }
+})
+
+test('Given 系统权限授予 CuaDriver.app When 启动 macOS 连接 Then 使用官方代理保留授权身份', () => {
+  expect(driverMcpArguments('darwin')).toEqual(['mcp'])
+  expect(driverMcpArguments('win32')).toEqual(['mcp', '--direct'])
 })
 
 test('驱动发送超限的不完整消息时立即中断而非继续缓存', async () => {

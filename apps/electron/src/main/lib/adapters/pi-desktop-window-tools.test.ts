@@ -47,9 +47,19 @@ describe('Pi 桌面工具入口', () => {
     try {
       const { result, reference } = await f.observe()
       expect(result.content[1]).toEqual({ type: 'image', mimeType: 'image/png', data: png })
-      await f.invoke('DesktopWindowAct', { reference })
+      await f.invoke('DesktopWindowAct', { reference, value: null })
       expect(f.calls).toEqual(['connect', 'list_windows', 'choose', 'list_windows', 'get_window_state', 'confirm', 'list_windows', 'click', 'close'])
       await expect(f.invoke('DesktopWindowAct', { reference })).rejects.toThrow('请先观察')
+    } finally { f.lifetime.abort() }
+  })
+
+  test('Given Responses 将空字符串传给按钮 When 请求填写 Then 拒绝并且不发出授权提示或驱动动作', async () => {
+    const f = fixture()
+    try {
+      const { reference } = await f.observe()
+      await expect(f.invoke('DesktopWindowAct', { reference, value: '' })).rejects.toThrow('按钮只支持点击')
+      expect(f.calls).not.toContain('confirm')
+      expect(f.calls).not.toContain('set_value')
     } finally { f.lifetime.abort() }
   })
 

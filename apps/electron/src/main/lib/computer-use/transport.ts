@@ -14,10 +14,15 @@ export interface DriverConnection {
   close(): void
 }
 
-/** 每次观察独占一个 MCP stdio 进程，保留快照引用；只发送固定的协议与工具。 */
+export function driverMcpArguments(platform: NodeJS.Platform): string[] {
+  // macOS 的辅助功能和录屏授权属于 CuaDriver.app，由官方代理使用该身份。
+  return platform === 'darwin' ? ['mcp'] : ['mcp', '--direct']
+}
+
+/** 每次观察独占一个 MCP stdio 连接，保留快照引用，只发送固定的协议与工具。 */
 export async function openDriver(file: string, signal: AbortSignal): Promise<DriverConnection> {
   signal.throwIfAborted()
-  const child = spawn(file, ['mcp', '--direct'], {
+  const child = spawn(file, driverMcpArguments(process.platform), {
     cwd: dirname(file), windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'],
     env: { ...getDefaultEnvironment(), CUA_DRIVER_RS_TELEMETRY_ENABLED: '0', DO_NOT_TRACK: '1' },
   })

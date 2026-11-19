@@ -95,13 +95,15 @@ export class DesktopWindowSession {
   previewSource(connect: (signal: AbortSignal) => Promise<DriverConnection>): PreviewSource {
     const target = this.snapshot?.window
     if (!target) throw new Error('请先选择预览窗口')
+    // macOS 代理同时管理两个 stdio 连接，同一驱动会话不能跨连接使用。
+    const previewSession = randomUUID()
+    const args = { pid: target.pid, window_id: target.id, session: previewSession }
     let connection: DriverConnection | undefined
     const withTarget = async (signal: AbortSignal) => {
       this.checkAccess(signal)
       connection ??= await connect(signal)
       this.checkAccess(signal)
-      const args = { pid: target.pid, window_id: target.id, session: this.session }
-      const candidates = windows(await connection.call('list_windows', { pid: target.pid, on_screen_only: true, session: this.session }))
+      const candidates = windows(await connection.call('list_windows', { pid: target.pid, on_screen_only: true, session: previewSession }))
       this.checkAccess(signal)
       if (!candidates.some(window => identity(window, target))) throw new Error('目标窗口已关闭或发生变化，请重新选择')
       return { driver: connection, args }
@@ -119,7 +121,7 @@ export class DesktopWindowSession {
       },
       activate: async signal => {
         const { driver, args } = await withTarget(signal)
-        const result = await driver.call('bring_to_front', { pid: args.pid, window_id: args.window_id })
+        const result = await driver.call('bring_to_front', args)
         if (record(result.structuredContent) && result.structuredContent.activated === false) throw new Error('目标窗口尚未激活')
         this.checkAccess(signal)
       },
@@ -133,6 +135,7 @@ export class DesktopWindowSession {
     this.snapshot = undefined
     const control = snapshot?.controls.get(reference)
     if (!snapshot || !control || Date.now() >= snapshot.expires) throw new Error('控件引用已失效，请重新观察')
+    if (value !== undefined && /^(AX)?Button$/i.test(control.element.role)) throw new Error('按钮只支持点击，请重新观察并将 value 设为 null')
     if (!await this.consent.confirm(snapshot.window, control.element, value, signal)) throw new Error('用户取消了桌面操作')
     await this.verify(snapshot.window, signal)
     this.checkAccess(signal)
