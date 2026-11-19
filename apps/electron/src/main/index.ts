@@ -431,16 +431,11 @@ function showAndFocusMainWindow(): void {
  * Get the appropriate app icon path for the current platform
  */
 function getIconPath(): string {
-  // resources 在 build:resources 阶段被复制到 dist/ 下，与 main.cjs 同级
-  const resourcesDir = join(__dirname, 'resources')
-
   if (process.platform === 'darwin') {
-    return join(resourcesDir, 'icon.icns')
-  } else if (process.platform === 'win32') {
-    return join(resourcesDir, 'icon.ico')
-  } else {
-    return join(resourcesDir, 'icon.png')
+    // electron-builder 将 macOS 应用图标放在应用 Resources 中。
+    return join(app.isPackaged ? process.resourcesPath : join(__dirname, 'resources'), 'icon.icns')
   }
+  return join(__dirname, 'resources', process.platform === 'win32' ? 'icon.ico' : 'icon.png')
 }
 
 function saveMainWindowState(): void {
