@@ -107,6 +107,8 @@ export interface AgentTerminalCloseEvent {
 export interface AgentTerminalActivity {
   sessionId: string
   terminalIds: string[]
+  /** 最近一次由 Agent 打开或执行的可用终端。 */
+  preview?: { terminalId: string; at: number }
 }
 
 export interface AgentTerminalCatalog {

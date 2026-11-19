@@ -20,6 +20,13 @@ export interface BrowserViewLayout {
 
 export type BrowserExecutionSource = 'user' | 'automation' | 'delegation'
 
+export interface AgentFloatingPreviewRequest {
+  sessionId: string
+  runGeneration: number
+  kind: 'browser' | 'terminal'
+  targetId: string
+}
+
 export type BrowserTraceAction = 'navigate' | 'observe' | 'find' | 'wait' | 'click' | 'act' | 'fill' | 'press' | 'hover' | 'drag' | 'scroll' | 'extract' | 'select' | 'upload' | 'dom' | 'script' | 'screenshot' | 'tab' | 'download' | 'popup'
 export type BrowserOperationStatus = 'dispatched' | 'verified' | 'failed' | 'unknown'
 
@@ -63,6 +70,8 @@ export interface BrowserTabSummary {
 
 export interface BrowserViewState {
   sessionId: string
+  /** 首次使用需打开完整面板，等待用户确认风险提示。 */
+  requiresRiskAcknowledgement?: boolean
   /** 非用户触发时，面板可显示来源并提供停止当前 Agent run 的控制。 */
   executionSource: BrowserExecutionSource
   /** 用户在浏览器面板中查看的 tab。 */

@@ -53,12 +53,22 @@ export interface AgentTerminalRecord {
   exitCode?: number
   retained: boolean
   active: boolean
+  previewAt: number
+}
+
+function getAgentTerminalActivity(sessionId: string): AgentTerminalActivity {
+  const records = getAgentTerminalList(sessionId)
+  const preview = records.filter(record => record.status === 'running')
+    .sort((left, right) => right.previewAt - left.previewAt)[0]
+  return {
+    sessionId,
+    terminalIds: records.filter(record => record.active).map(record => record.terminalId),
+    ...(preview ? { preview: { terminalId: preview.terminalId, at: preview.previewAt } } : {}),
+  }
 }
 
 function notifyAgentTerminalActivity(sessionId: string): void {
-  const terminalIds = getAgentTerminalList(sessionId).filter(record => record.active).map(record => record.terminalId)
-  const event: AgentTerminalActivity = { sessionId, terminalIds }
-  getMainWindow()?.webContents.send(TERMINAL_IPC_CHANNELS.AGENT_ACTIVITY, event)
+  getMainWindow()?.webContents.send(TERMINAL_IPC_CHANNELS.AGENT_ACTIVITY, getAgentTerminalActivity(sessionId))
 }
 
 function scheduleAgentTerminalActivity(): void {
@@ -249,9 +259,10 @@ export async function openAgentTerminal(input: {
   if (!terminals.has(terminalId) || terminalSessionOwners.get(terminalId) !== input.sessionId) {
     throw new Error('终端已退出或会话已关闭')
   }
-  const record: AgentTerminalRecord = { sessionId: input.sessionId, terminalId, title, cwd, profile: resolvedProfile, status: 'running', retained: false, active: false }
+  const record: AgentTerminalRecord = { sessionId: input.sessionId, terminalId, title, cwd, profile: resolvedProfile, status: 'running', retained: false, active: false, previewAt: Date.now() }
   agentTerminals.set(terminalId, record)
   notifyAgentTerminalOpen(record)
+  notifyAgentTerminalActivity(record.sessionId)
   scheduleAgentTerminalActivity()
   return record
 }
@@ -287,6 +298,8 @@ export async function executeAgentTerminal(input: {
       throw new Error(`终端 ${requestedTerminalId} 运行在 ${record.profile}，不能以 ${profile} 复用；请省略 terminalId 另开新终端`)
     }
     await writeTerminal({ terminalId: record.terminalId, data: `${command}\r` })
+    record.previewAt = Date.now()
+    notifyAgentTerminalActivity(record.sessionId)
     return record
   }
 
@@ -306,18 +319,19 @@ export function listAgentTerminals(sessionId: string): AgentTerminalRecord[] {
 
 export function getAgentTerminalCatalog(): AgentTerminalCatalog {
   const terminals = [...agentTerminals.values()].map(({ sessionId, terminalId, title, cwd, profile }) => ({ sessionId, terminalId, title, cwd, profile }))
-  const sessions = new Map<string, string[]>()
-  for (const record of agentTerminals.values()) {
-    if (!record.active) continue
-    const ids = sessions.get(record.sessionId) ?? []
-    ids.push(record.terminalId)
-    sessions.set(record.sessionId, ids)
-  }
-  return { terminals, activity: Array.from(sessions, ([sessionId, terminalIds]) => ({ sessionId, terminalIds })) }
+  const sessions = new Set(terminals.map(terminal => terminal.sessionId))
+  return { terminals, activity: Array.from(sessions, getAgentTerminalActivity) }
 }
 
 export function retainAgentTerminal(sessionId: string, terminalId: string): void {
   getOwnedAgentTerminal(sessionId, terminalId).retained = true
+}
+
+export function readFloatingTerminalPreview(sessionId: string, terminalId: string, startedAt: number): string | null {
+  const record = agentTerminals.get(terminalId)
+  if (record?.sessionId !== sessionId || record.status !== 'running' || record.previewAt < startedAt) return null
+  const buffer = terminalOutputBuffers.get(terminalId)
+  return buffer ? readTerminalOutput(buffer, { limit: 1_500 }).output : null
 }
 
 /** 读取当前 Agent 会话拥有的终端输出；只暴露有限内存回放缓冲，不读取其他会话或系统终端。 */

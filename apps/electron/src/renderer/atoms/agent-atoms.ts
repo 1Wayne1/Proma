@@ -828,6 +828,8 @@ export const agentDiffPanelTabAtom = atom<Map<string, AgentSidePanelTab | 'brows
 /** 当前 renderer 运行期内的右侧双 Pane 状态；动态 Tab 失效时由 SidePanel 主动清理。 */
 export const agentSidePanelSplitMapAtom = atom<Map<string, RightWorkspaceSplitState>>(new Map())
 
+export const agentTerminalPreviewAtom = atom<Map<string, { terminalId: string; at: number }>>(new Map())
+
 /** 双 Pane 分隔比例按 Session 持久化，但不持久化可能在重启后失效的动态 Tab ID。 */
 export const agentSidePanelSplitRatioMapAtom = atomWithStorage<Record<string, number>>(
   'proma-agent-workspace-split-ratio-by-session',

@@ -178,20 +178,46 @@ export class AgentMemoryService {
     if (expectedRevision === null) return { status: 'unchanged', document: file.document }
 
     this.archiveCurrent(file)
+    this.markArchived(file, path ?? (target.scope.kind === 'global' ? 'user_profile.md' : 'MEMORY.md'))
+    this.commit(file)
+    return { status: 'saved', document: { content: null, revision: null, usage: profileUsage(target.scope, null) } }
+  }
+
+  private markArchived(file: MemoryFile, path: string): void {
     const { config } = file.resolved
-    const marker = `${archiveDirectory(target)}/${file.key}.json`
+    const marker = `${archiveDirectory(file.resolved.target)}/${file.key}.json`
     const state = inspectRestoreFile(config.path, marker, 8192)
     if (state.bytes) {
       const archive = this.readResolvedFile(file.resolved, readArchivePath(state))
       if (archive.key !== file.key) throw new Error('记忆归档索引不匹配')
     } else {
       // 标记先于移除发布。若移除失败，文件仍存在，列表不会将它显示为已归档。
-      const logicalPath = path ?? (target.scope.kind === 'global' ? 'user_profile.md' : 'MEMORY.md')
-      const data = Buffer.from(JSON.stringify({ version: 1, path: logicalPath.replace(/\\/g, '/') }))
+      const data = Buffer.from(JSON.stringify({ version: 1, path: path.replace(/\\/g, '/') }))
       commitRestoreFile(config.path, marker, state, data, 8192, () => assertMemoryRoots(file.resolved))
     }
-    this.commit(file)
-    return { status: 'saved', document: { content: null, revision: null, usage: profileUsage(target.scope, null) } }
+  }
+
+  hasImportedHistoryVersion(target: MemoryTarget, path: string, revision: string): boolean {
+    if (!REVISION_PATTERN.test(revision)) throw new Error('无效的记忆 revision')
+    const file = this.readFile(target, path)
+    const { config } = file.resolved
+    const state = inspectRestoreFile(config.path, `${historyDirectory(file)}/${revision}.json`, MAX_HISTORY_BYTES)
+    if (!state.bytes) return false
+    this.readVersion(file, revision)
+    if (file.document.revision === null && path.startsWith('memory/')) {
+      const marker = inspectRestoreFile(config.path, `${archiveDirectory(target)}/${file.key}.json`, 8192)
+      if (!marker.bytes) return false
+      if (this.readResolvedFile(file.resolved, readArchivePath(marker)).key !== file.key) throw new Error('记忆归档索引不匹配')
+    }
+    return true
+  }
+
+  /** 迁入历史只追加不可变版本，不改当前正文。历史独有主题通过归档列表保留恢复入口。 */
+  importHistoryVersion(target: MemoryTarget, access: MemoryWriteAccess, path: string, content: string, savedAt: number): void {
+    assertMemoryWriteAccess(access)
+    const file = this.readFile(target, path)
+    this.storeHistoryVersion(file, content, memoryHash(content), savedAt)
+    if (file.document.revision === null && path.startsWith('memory/')) this.markArchived(file, path)
   }
 
   history(target: MemoryTarget, path?: string): MemoryHistoryEntry[] {
@@ -273,6 +299,10 @@ export class AgentMemoryService {
   private archiveCurrent(file: MemoryFile): void {
     const { content, revision } = file.document
     if (content === null || revision === null) return
+    this.storeHistoryVersion(file, content, revision, Date.now())
+  }
+
+  private storeHistoryVersion(file: MemoryFile, content: string, revision: string, savedAt: number): void {
     const directory = historyDirectory(file)
     const path = `${directory}/${revision}.json`
     const { config, target } = file.resolved
@@ -286,11 +316,14 @@ export class AgentMemoryService {
       targetId: target.id,
       fileKey: file.key,
       revision,
-      savedAt: Date.now(),
+      savedAt,
       content,
     }
     const bytes = Buffer.from(JSON.stringify(version), 'utf8')
-    commitRestoreFile(config.path, path, state, bytes, MAX_HISTORY_BYTES, () => assertMemoryRoots(file.resolved))
+    commitRestoreFile(config.path, path, state, bytes, MAX_HISTORY_BYTES, () => {
+      assertMemoryRoots(file.resolved)
+      this.resolveCurrentTarget(target)
+    })
   }
 
   private write(file: MemoryFile, content: string, expectedRevision: string | null): MemoryWriteResult {

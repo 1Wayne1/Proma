@@ -4,9 +4,8 @@ import type { AgentTerminalActivity, AgentTerminalCloseEvent, AgentTerminalOpenE
 import {
   agentDiffPanelTabAtom,
   agentTerminalActivityAtom,
+  agentTerminalPreviewAtom,
   agentTerminalTabsAtom,
-  currentAgentSessionIdAtom,
-  currentSessionSidePanelOpenAtom,
   getTerminalSidePanelTab,
 } from '@/atoms/agent-atoms'
 
@@ -18,17 +17,13 @@ export function useAgentTerminalEvents(): void {
     const touchedSessions = new Set<string>()
     let restoring = true
 
-    const openTab = (event: AgentTerminalOpenEvent, focus: boolean): void => {
+    const openTab = (event: AgentTerminalOpenEvent): void => {
       const { sessionId, terminalId, title, cwd } = event
       store.set(agentTerminalTabsAtom, previous => {
         const tabs = previous.get(sessionId) ?? []
         if (tabs.some(tab => tab.terminalId === terminalId)) return previous
         return new Map(previous).set(sessionId, [...tabs, { terminalId, title, cwd, agentOwned: true }])
       })
-      if (focus && store.get(currentAgentSessionIdAtom) === sessionId) {
-        store.set(currentSessionSidePanelOpenAtom, true)
-        store.set(agentDiffPanelTabAtom, previous => new Map(previous).set(sessionId, getTerminalSidePanelTab(terminalId)))
-      }
     }
     const closeTab = ({ sessionId, terminalId }: AgentTerminalCloseEvent): void => {
       store.set(agentTerminalTabsAtom, previous => {
@@ -45,10 +40,18 @@ export function useAgentTerminalEvents(): void {
         return new Map(previous).set(sessionId, 'files')
       })
     }
-    const setActivity = ({ sessionId, terminalIds }: AgentTerminalActivity): void => {
+    const setActivity = ({ sessionId, terminalIds, preview }: AgentTerminalActivity): void => {
       store.set(agentTerminalActivityAtom, previous => {
         const next = new Map(previous)
         if (terminalIds.length) next.set(sessionId, terminalIds)
+        else next.delete(sessionId)
+        return next
+      })
+      store.set(agentTerminalPreviewAtom, previous => {
+        const current = previous.get(sessionId)
+        if (current?.terminalId === preview?.terminalId && current?.at === preview?.at) return previous
+        const next = new Map(previous)
+        if (preview) next.set(sessionId, preview)
         else next.delete(sessionId)
         return next
       })
@@ -56,7 +59,7 @@ export function useAgentTerminalEvents(): void {
 
     const unsubscribeOpen = window.electronAPI.onAgentTerminalOpen(event => {
       if (restoring) touchedTerminals.add(event.terminalId)
-      openTab(event, true)
+      openTab(event)
     })
     const unsubscribeClose = window.electronAPI.onAgentTerminalClose(event => {
       if (restoring) touchedTerminals.add(event.terminalId)
@@ -69,7 +72,7 @@ export function useAgentTerminalEvents(): void {
     void window.electronAPI.getAgentTerminalCatalog().then(catalog => {
       if (disposed) return
       for (const terminal of catalog.terminals) {
-        if (!touchedTerminals.has(terminal.terminalId)) openTab(terminal, false)
+        if (!touchedTerminals.has(terminal.terminalId)) openTab(terminal)
       }
       for (const activity of catalog.activity) {
         if (!touchedSessions.has(activity.sessionId)) setActivity(activity)

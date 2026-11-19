@@ -178,7 +178,7 @@ import type {
 import type { UserProfile, AppSettings } from '../types'
 import { getRuntimeStatus, getGitRepoStatus, reinitializeRuntime } from './lib/runtime-init'
 import { browserController } from './lib/browser-controller'
-import { acknowledgeTerminalOutput, closeTerminalsForSession, createTerminal, getAgentTerminalCatalog, getTerminalSnapshot, killTerminal, retainAgentTerminal, resizeTerminal, writeTerminal } from './lib/terminal-service'
+import { acknowledgeTerminalOutput, closeTerminalsForSession, createTerminal, getAgentTerminalCatalog, getTerminalSnapshot, killTerminal, readFloatingTerminalPreview, retainAgentTerminal, resizeTerminal, writeTerminal } from './lib/terminal-service'
 import { getMainWindow } from './lib/main-window-store'
 import { resolveBrowserProfileKey } from './lib/browser-profile-policy'
 import { getUnstagedChanges, invalidateGitDiffCache, getFileDiff, getUntrackedContent, revertFile, getDiffContents, listWorktrees, getWorktreeChanges, getMainRepoRoot } from './lib/git-diff-service'
@@ -325,7 +325,7 @@ import {
   searchAgentSessionReferences,
   resolveAgentCwd,
 } from './lib/agent-session-manager'
-import { runAgent, stopAgent, stopAgentAndDrain, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, isAgentSessionBusy, rebindActiveAgentStreams, listQueuedAgentMessages, reserveAgentSessionStart, queueAgentMessage, submitOrEnqueueAgentMessage, enqueueAgentQueuedMessage, cancelAgentQueuedMessage, moveAgentQueuedMessage, clearAgentQueuedMessages, updateAgentPermissionMode, rewindAgentSession, setVisibleAgentSession, isVisibleAgentSession, capturePromaSelfForeground } from './lib/agent-service'
+import { runAgent, stopAgent, stopAgentAndDrain, generateAgentTitle, saveFilesToAgentSession, saveFilesToWorkspaceFiles, isAgentSessionActive, isAgentSessionBusy, rebindActiveAgentStreams, listQueuedAgentMessages, reserveAgentSessionStart, queueAgentMessage, submitOrEnqueueAgentMessage, enqueueAgentQueuedMessage, cancelAgentQueuedMessage, moveAgentQueuedMessage, clearAgentQueuedMessages, updateAgentPermissionMode, rewindAgentSession, setVisibleAgentSession, isVisibleAgentSession, capturePromaSelfForeground, getVisibleAgentRunStartedAt } from './lib/agent-service'
 import { permissionService } from './lib/agent-permission-service'
 import { resolvePathAgainstAgentCwd } from './lib/agent-file-path'
 import { askUserService } from './lib/agent-ask-user-service'
@@ -2730,6 +2730,17 @@ export function registerIpcHandlers(): void {
       return browserController.getState(sessionId)
     },
   )
+  ipcMain.handle(AGENT_IPC_CHANNELS.GET_FLOATING_PREVIEW, async (event, input: import('@proma/shared').AgentFloatingPreviewRequest) => {
+    assertMainAction(event)
+    if (!input || typeof input.sessionId !== 'string' || typeof input.targetId !== 'string' ||
+      !Number.isSafeInteger(input.runGeneration) || (input.kind !== 'browser' && input.kind !== 'terminal')) return null
+    const { sessionId, targetId, runGeneration } = input
+    const startedAt = getVisibleAgentRunStartedAt(event.sender, sessionId, runGeneration)
+    if (startedAt === undefined) return null
+    if (input.kind === 'terminal') return readFloatingTerminalPreview(sessionId, targetId, startedAt)
+    const image = await browserController.captureFloatingPreview(sessionId, targetId, startedAt)
+    return getVisibleAgentRunStartedAt(event.sender, sessionId, runGeneration) === startedAt ? image : null
+  })
   ipcMain.handle(
     AGENT_IPC_CHANNELS.SET_BROWSER_LAYOUT,
     async (event, layout: BrowserViewLayout): Promise<void> => {

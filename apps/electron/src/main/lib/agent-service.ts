@@ -241,6 +241,10 @@ export function isVisibleAgentSession(sender: WebContents, sessionId: string): b
   return visibleAgentSessions.get(sender) === sessionId
 }
 
+export function getVisibleAgentRunStartedAt(sender: WebContents, sessionId: string, runGeneration: number): number | undefined {
+  if (isVisibleAgentSession(sender, sessionId)) return orchestrator.getActiveRunStartedAt(sessionId, runGeneration)
+}
+
 export function setVisibleAgentSession(webContents: WebContents, sessionId: string | null): void {
   rebindActiveAgentStreams(webContents)
   attachWebContentsCleanup(webContents)

@@ -10,7 +10,7 @@ import { TurnRestoreService } from '../restore'
 import { registerTurnOperationsIpcHandlers } from '../operations-ipc'
 import { removeProjectWorktree } from '../../worktree-removal'
 import { assertNoProjectMutation, withProjectMutation } from '../../project-mutation-guard'
-import { closeTerminalsForSession, createTerminal, getAgentTerminalCatalog, getTerminalSnapshot, hasTerminalsInProject, killTerminal, listAgentTerminals, openAgentTerminal, releaseExitedTerminalsInProject, retainAgentTerminal } from '../../terminal-service'
+import { closeTerminalsForSession, createTerminal, getAgentTerminalCatalog, getTerminalSnapshot, hasTerminalsInProject, killTerminal, listAgentTerminals, openAgentTerminal, readFloatingTerminalPreview, releaseExitedTerminalsInProject, retainAgentTerminal } from '../../terminal-service'
 import '../../../../preload/index'
 
 async function verify(): Promise<void> {
@@ -76,14 +76,18 @@ async function verify(): Promise<void> {
   const probeDeadline = new AbortController()
   const probeTimer = setTimeout(() => probeDeadline.abort(), 8_000)
   const [, activity] = await once(ipcRenderer, TERMINAL_IPC_CHANNELS.AGENT_ACTIVITY, { signal: probeDeadline.signal }).finally(() => clearTimeout(probeTimer))
-  assert.deepEqual(activity, { sessionId: owner.sessionId, terminalIds: [terminal.terminalId] })
+  assert.deepEqual(activity, { sessionId: owner.sessionId, terminalIds: [terminal.terminalId], preview: { terminalId: terminal.terminalId, at: terminal.previewAt } })
   assert.throws(() => retainAgentTerminal('other-session', terminal.terminalId), /不属于/)
   retainAgentTerminal(owner.sessionId, terminal.terminalId)
   terminalHost.output!({ terminalId: terminal.terminalId, sequence: 1, data: '结果' })
+  assert.equal(readFloatingTerminalPreview(owner.sessionId, terminal.terminalId, terminal.previewAt), '结果')
+  assert.equal(readFloatingTerminalPreview('other-session', terminal.terminalId, terminal.previewAt), null)
+  assert.equal(readFloatingTerminalPreview(owner.sessionId, terminal.terminalId, terminal.previewAt + 1), null)
   assert.deepEqual(terminalHost.acknowledgements, [{ terminalId: terminal.terminalId, sequence: 1 }])
   const emptyActivity = once(ipcRenderer, TERMINAL_IPC_CHANNELS.AGENT_ACTIVITY)
   terminalHost.exit!({ terminalId: terminal.terminalId, exitCode: 0 })
   assert.deepEqual((await emptyActivity)[1], { sessionId: owner.sessionId, terminalIds: [] })
+  assert.equal(readFloatingTerminalPreview(owner.sessionId, terminal.terminalId, terminal.previewAt), null)
   assert.equal(getTerminalSnapshot(terminal.terminalId).output, '结果')
   assert.equal(getTerminalSnapshot(terminal.terminalId).exitCode, 0)
   assert.equal(listAgentTerminals(owner.sessionId).length, 1)

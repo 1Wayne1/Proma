@@ -216,6 +216,7 @@ function describeBrowserScriptException(response: CdpResponse): string {
 }
 
 export class BrowserController {
+  private readonly previewCaptures = new WeakSet<BrowserTabRecord>()
   private owner: BrowserWindow | null = null
   private readonly sessions = new Map<string, BrowserSessionRecord>()
   private readonly configurations = new Map<string, BrowserSessionConfiguration>()
@@ -288,6 +289,7 @@ export class BrowserController {
     const trace = browserSession.ledger.slice(-MAX_TRACE_ITEMS)
     return {
       sessionId: browserSession.sessionId,
+      requiresRiskAcknowledgement: !hasAcknowledgedBrowserRiskDisclaimer(getSettings()),
       executionSource: browserSession.executionSource,
       activeTabId: active.tabId,
       agentTabId: browserSession.agentTabId,
@@ -606,6 +608,8 @@ export class BrowserController {
       },
     })
     const popupInitialUrl = popupOptions?.popupInitialUrl ?? null
+    // Agent 可以在完整面板挂载前使用页面。为后台页面提供可截图的初始视口。
+    view.setBounds({ x: 0, y: 0, width: 960, height: 640 })
     const tab: BrowserTabRecord = {
       tabId,
       view,
@@ -1779,6 +1783,37 @@ export class BrowserController {
       this.trace(browserSession, tab, 'script', `执行页面 JavaScript（${script.length} 字符）`, 'dispatched')
       return { tabId: tab.tabId, url: tab.state.url, result }
     })
+  }
+
+  /** 低频本地缩略图只读取已有的 Agent 工作页，不进入工具审计或命令队列。 */
+  async captureFloatingPreview(sessionId: string, tabId: string, startedAt: number): Promise<string | null> {
+    const browserSession = this.sessions.get(sessionId)
+    const tab = browserSession?.tabs.get(tabId)
+    if (!browserSession || !tab || !hasAcknowledgedBrowserRiskDisclaimer(getSettings())) return null
+    const current = (): boolean => this.sessions.get(sessionId) === browserSession &&
+      browserSession.agentTabId === tabId && browserSession.tabs.get(tabId) === tab && !tab.view.webContents.isDestroyed()
+    const activity = browserSession.ledger.at(-1)
+    if (!current() || !activity || activity.tabId !== tabId || activity.at < startedAt ||
+      !tab.state.url || tab.state.url === 'about:blank' || this.previewCaptures.has(tab)) return null
+    const { width, height } = tab.view.getBounds()
+    const debuggerClient = tab.view.webContents.debugger
+    if (width <= 0 || height <= 0 || !debuggerClient.isAttached()) return null
+    const { generation } = tab
+    try {
+      // 隐藏且无原生挂载的 WebContentsView 在 macOS 上可能没有可供 capturePage 读取的画面。
+      // 从同一标签的 CDP 页面表面抓取，避免挂载原生 View 或抢用户焦点。
+      const capture = debuggerClient.sendCommand('Page.captureScreenshot', {
+        format: 'jpeg', quality: 60, fromSurface: true, captureBeyondViewport: true,
+        clip: { x: 0, y: 0, width, height, scale: Math.min(1, 320 / width, 230 / height) },
+      }) as Promise<{ data?: string }>
+      this.previewCaptures.add(tab)
+      void capture.finally(() => this.previewCaptures.delete(tab)).catch(() => undefined)
+      const { data } = await withBrowserCdpTimeout(() => capture, '浮动预览', 2_000)
+      if (!current() || tab.generation !== generation || typeof data !== 'string' || data.length > 176_000) return null
+      return isValidImageBytes('image/jpeg', Buffer.from(data, 'base64')) ? data : null
+    } catch {
+      return null
+    }
   }
 
   async screenshot(sessionId: string, tabId?: string, signal?: AbortSignal): Promise<{ tabId: string; url: string; mimeType: string; base64: string }> {

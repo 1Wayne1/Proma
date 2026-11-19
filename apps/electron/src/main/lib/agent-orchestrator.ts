@@ -2436,6 +2436,10 @@ export class AgentOrchestrator {
     return this.activeSessions.has(sessionId)
   }
 
+  getActiveRunStartedAt(sessionId: string, runGeneration: number): number | undefined {
+    if (this.activeSessions.get(sessionId) === runGeneration) return this.activeSessionStartedAt.get(sessionId)
+  }
+
   /** 返回主进程当前仍在执行的 Agent，会话重载时供 renderer 恢复运行指示。 */
   listActiveSessionSnapshots(): AgentActiveSessionSnapshot[] {
     return [...this.activeSessions.keys()].map((sessionId) => ({
