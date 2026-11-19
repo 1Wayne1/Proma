@@ -1,14 +1,74 @@
 # Proma 非云功能改造交接
 
-更新日期为 2026-11-19（Asia/Shanghai），交接记录版本为 1.0.17。
+更新日期为 2026-11-19（Asia/Shanghai），交接记录版本为 1.0.22。
 
 ## 接手先看
 
 1. 在当前 `dev/new-version-features` 工作区修改工程。2026-11-18 的续作目录是 macOS 的 `/Users/weibo/projects/Proma`，下文的 Windows 路径为此前实施和证据位置。
-2. 先读根目录 [AGENTS.md](../../AGENTS.md)，再读 [spec.md](../../spec.md) 第 2、3、10、13、15、26—35 节及本文。运行 `git status` 核对当前工作区。
-3. **macOS arm64 已通过 S6 窗口主流程和 S7 新装、覆盖升级、Automation、Collaboration 实机验收。** 当前桌面应用 `0.19.83` 使用 Pi `1.5.2`。升级前可回退基线为 `10b98fb7`。多屏 DPI、正式发布和 Windows 完整验收待完成。
+2. 先读根目录 [AGENTS.md](../../AGENTS.md)，再读 [spec.md](../../spec.md) 第 2、3、10、13、15、26—38 节及本文。运行 `git status` 核对当前工作区。
+3. **macOS arm64 已通过 S6 窗口主流程和 S7 新装、覆盖升级、Automation、Collaboration 实机验收。** Git HEAD 为 `dcdf68e9`（桌面应用 `0.19.83`、Pi `1.5.2`）；当前工作区另有未提交的 `0.19.84`—`0.19.90` 迭代改动（147 个受跟踪变更文件 + 30 个新增未跟踪文件），详见下节总览。多屏 DPI、正式发布和 Windows 完整验收待完成。
 4. 用户明确排除 Proma 云服务。沿用 Pi、本地 JSON/JSONL、Bun、Jotai 和已有权限边界。参考安装版提供功能证据，不是要求复制其云端架构。
 5. 工程命令使用 Bun。此前的 Node/REA 卸载记录适用于 Windows。当前 Mac 上的 REA 已按用户要求安装，只有需要确认安装版差异时才使用。
+
+## 最新接手点：macOS 正式版 0.22.80 / 0.22.97 差异移植
+
+### 工作区与已交付项
+
+- `/Users/weibo/projects/Proma`，分支 `dev/new-version-features`，记录时比 `origin/dev/new-version-features` 领先 1 个提交。续作前执行 `git status --short --branch`、`git log -1 --oneline` 和 `git diff --stat`。**使用本工作区接手**；新 worktree 只包含已提交基线，不会带上本次未提交的代码和未跟踪文件。
+- `0.19.84` 在「设置 → 关于 → 更新日志」及已下载更新通知加入应用内离线查看。Vite 从仓库 `release-notes/*.md` 随构建打包；按数字版本倒序，找不到下载版本的说明时明确提示，仍可浏览历史。原 GitHub 版本历史保持独立；未添加 IPC、运行依赖或 Proma 云请求。`0.19.85` 仅为交接文档递增 `apps/electron/package.json` 和 `bun.lock` 中的 Electron patch 版本，shared 仍为 `0.1.81`。`0.19.86` / shared `0.1.82` 为工作区既有未提交的旧记忆历史桶兼容与浮窗预览改动。`0.19.87` / shared `0.1.83` 完成显式网络重连与旧 Chat 兼容入口 REA 对照调查。`0.19.88` / shared `0.1.84` 按用户指令移除完整 Chat 模式与现有入口并实现与正式版 `0.22.80` 对齐的只读「历史 Chat」兼容服务、四层 IPC、设置 UI 与 BDD 测试。`0.19.89` / shared `0.1.85` / core `0.2.18` 记录本机新装 `0.22.97` 与 `0.22.80` 全部版本差异并完成其中非云端能力移植。`0.19.90` 仅本次全量工作总览交接记录与文档元数据递增（代码、测试与共享包保持在 `0.19.89` 验证基线），同时完整保留前述全部未提交改动（详见 [spec.md](../../spec.md) 第 36—38 节）。以下旧表格及规格的版本号是历史快照。
+
+#### 截止 2026-11-19 已完成工作总览（未提交工作区 `0.19.84`—`0.19.90`）
+
+| 迭代版本 | 所属包版本 | 核心交付内容 | 对应规格 / 说明 |
+| --- | --- | --- | --- |
+| `0.19.84` | Electron `0.19.84` | 「设置 → 关于 → 更新日志」与已下载更新通知的应用内离线发布说明查看 | Vite 打包 `release-notes/*.md`，无云端请求 |
+| `0.19.85` | Electron `0.19.85` | 交接文档补齐与版本同步基线 | 仅文档与版本号递增 |
+| `0.19.86` | Electron `0.19.86` / shared `0.1.82` | `0.22.80` 旧记忆归档历史桶兼容（`agent-memory-legacy-history.ts`）与 Agent 活动浮窗预览策略/组件 | 保留既有多端兼容结构，含 `floating-preview-policy` 单测 |
+| `0.19.87` | Electron `0.19.87` / shared `0.1.83` | 显式网络重连（并发合并、代理代次失效、受管浏览器刷新、空闲 HTTP MCP 清理与运行中租约退休、取消/`before-quit`、四层 IPC 与设置 UI）及旧 Chat 兼容调研 | [spec.md](../../spec.md) 第 36 节 |
+| `0.19.88` | Electron `0.19.88` / shared `0.1.84` | 完整移除 Chat 模式/工具/系统提示词旧入口；拆分 4 个 `ATTACHMENT_IPC_CHANNELS`；落地对齐 `0.22.80` 的只读「历史 Chat」服务、主窗口校验四层 IPC、设置 UI 与会话隔离预填 | [spec.md](../../spec.md) 第 37 节 |
+| `0.19.89` | Electron `0.19.89` / shared `0.1.85` / core `0.2.18` | `0.22.80 -> 0.22.97` REA 差异记录，落地三项非云端能力：整窗与三轴文字缩放分离、Linked worktree Diff 监听与 `GIT_OPTIONAL_LOCKS: '0'`、GPT-6.2 Sol/Astra + Qwen 4 / Token Plan OpenAI 兼容迁移 + HTTP `524` 重试 | [spec.md](../../spec.md) 第 38 节（完整 `typecheck`/`bun test`/`electron:build` 通过） |
+| `0.19.90` | Electron `0.19.90`（shared `0.1.85` / core `0.2.18` 不变） | 本次阶段收口工作总览与 30 个新增未跟踪文件清点记录 | 仅文档与 Electron patch 递增 |
+
+#### 当前工作区 30 个新增未跟踪文件清单（提交时勿遗漏）
+
+- **离线更新日志（3）**：`apps/electron/src/renderer/components/settings/BundledReleaseNotesDialog.tsx`、`apps/electron/src/renderer/lib/bundled-release-notes{,.test}.ts`
+- **旧记忆兼容与浮窗预览（4）**：`apps/electron/src/main/lib/agent-memory-legacy-history.ts`、`apps/electron/src/renderer/components/agent/AgentFloatingPreviews.tsx`、`apps/electron/src/renderer/components/agent/floating-preview-policy{,.test}.ts`
+- **显式网络重连（2）**：`apps/electron/src/main/lib/network/network-reconnect{,.test}.ts`
+- **只读历史 Chat 与通用附件（13）**：`packages/shared/src/types/{attachments,legacy-chat}.ts`、`apps/electron/src/main/lib/legacy-chat-{service,ipc}{,.test}.ts`、`apps/electron/src/main/lib/fixtures/legacy-chat-ipc-{build,probe,stubs}.ts`、`apps/electron/src/renderer/lib/format-message-time.ts`、`apps/electron/src/renderer/components/settings/LegacyChatSettings.tsx`、`apps/electron/src/renderer/components/settings/legacy-chat-helpers{,.test}.ts`
+- **缩放分离、Worktree 监听与 Qwen 迁移（8）**：`packages/shared/src/utils/qwen-model-capabilities.ts`、`apps/electron/src/main/lib/font-sizes.ts`、`apps/electron/src/main/lib/app-window-zoom{,.test}.ts`、`apps/electron/src/main/lib/diff-directory-watch{,.test}.ts`、`apps/electron/src/main/lib/qwen-models{,.test}.ts`
+- 日志代码位于 `apps/electron/src/renderer/components/settings/` 的 `BundledReleaseNotesDialog.tsx`、`AboutSettings.tsx`、`ReleaseNotesViewer.tsx`，入口接线在 `apps/electron/src/renderer/main.tsx`；筛选、排序及选中逻辑和测试在 `apps/electron/src/renderer/lib/bundled-release-notes{,.test}.ts`。
+- `apps/electron/src/main/lib/agent-memory.ts`、`apps/electron/src/main/lib/agent-memory-legacy-history.ts`，以及 `AgentFloatingPreviews.tsx`、`floating-preview-policy{,.test}.ts` 等既有未提交改动均完整保留；未获授权不要提交、清理或覆盖。
+
+### 正式版证据与口径
+
+- `/Applications/Proma.app/Contents/Resources/app.asar`：前序基准为 `0.22.80`（SHA-256 `bd18f6e413ca3d35d286b1a3b204eb24cdcec530a77e6bab5869888938aa22d4`，父 Evidence `ev_f67ed6e99fa08c626a4a32fa12b9cd869f4bbc5426a68471653b394a6027b377`）；2026-11-19 本机已更新至 `0.22.97`（`Info.plist` Evidence `ev_821ef169c05aef22d9d2260a21b0023db19d79c16907203d40949d1a4b7d0b3e`，`app.asar` SHA-256 `0b9f36d9072158069bdd0a32178a63faefd5c8df2cf8c5744b51253c0a4024b2`，清单视图 `ev_28711aaca11ab225ae80ae0549227867bb2ef13b50b7a72bce86a5d56268d163` / 父 `ev_d81b223e8858e645d7b2a06406edb6afc685019ca5ede09f5e0d285e09c1ff4d`）。用 `record-and-continue` 记录相同的 10 处原生模块 ASAR 块完整性矛盾（冲突成员不作为可信依据）。两版 `compare_artifacts`（`ev_7e2dd38b8b303b0a3258d443f1887a7f8080260cd031db8cd8da35597c633145`）统计 13,563 项未变、79 项新增、77 项移除、31 项变更、10 项矛盾。只读参考提取目录 `/private/tmp/proma-rea-02297-nov19`（`ev_ec93229445f4e7795df24c7e5f023f8e05a9234442c7087f1f649843d58ea70c`）仅作分析缓存，不提交入库；同样不提交 `0.22.80` 缓存（`/private/tmp/proma-rea-02280-nov19` 等）及正式版 PNG 资产。
+- 对 `electronAPI` 对象的 TypeScript AST 比对（`0.22.80` 基线）：正式版 438 个顶层名、工作区 476 个，397 个同名，正式版独有名 41 个，工作区独有名 79 个；`0.22.97` 仅新增属于排除范围的 `computer-use:{get-update-status,check-update-status,update-status-changed}` 等 CDN 更新器接口，不作为社区版实现目标。
+
+### 下一批任务与完成标准
+
+1. **显式网络重连（已完成，工作区 `0.19.87` / shared `0.1.83`）。** 已用 REA 对照正式版 `dist/main.cjs`（行 421781 等）、`dist/preload.cjs`、`dist/agent-runtime.cjs`（行 12818-12823）及 `dist/renderer/assets/index-Dx4hpBZK.js` 完成核对。社区版已实现并发合并、代理缓存代次失效、受管浏览器 `Session` 刷新、空闲网络 MCP 清理（运行中租约仅退休、`stdio` 保留）、取消与 `before-quit` 清理、主窗口/主 frame 校验、四层 IPC（`network:reconnect` / `network:cancel-reconnect`）及设置 UI（`NetworkDiagnosticsSettings.tsx`），不中断活跃任务、不重放工具、不访问云端。
+2. **旧 Chat 的只读兼容入口与完整 Chat 模式移除（已完成，工作区 `0.19.88` / shared `0.1.84`）。** 已参照 `0.22.80` 移除完整 Chat 模式、Chat 工具、系统提示词管理、`MIGRATE_CHAT_TO_AGENT` 与相关 UI/atoms/hooks/测试；保留并拆出 `ATTACHMENT_IPC_CHANNELS` 4 个通用附件/资源通道，实现主进程 `legacy-chat-service.ts` / `legacy-chat-ipc.ts`、`preload/index.ts`、设置页「历史 Chat」`LegacyChatSettings.tsx` / `legacy-chat-helpers.ts` 及按会话隔离的 `agentPendingPromptAtomFamily`，强化了主窗口/主 frame 归属校验、先校验再建目录、`legacyTranscript`/删除中会话保护、原子写与原文件只读断言，文案严格限定本机设备，无 Proma 云请求。
+3. **macOS `0.22.97` 版本差异记录与非云端能力移植（已完成，当前工作区 `0.19.89` / `@proma/shared` `0.1.85` / `@proma/core` `0.2.18`）。**
+   - 已记录至 [spec.md](../../spec.md) 第 38 节，明确划分三项非云端移植与四类排除项（`computer-use-cdn-{update,runtime}` / `cdn.proma.cool`、`plan-quota-official` 企业月度重置、官方网关 `X-Proma-Trace-ID` 文案、二进制模型图标 PNG）。
+   - 已落地：（a）整窗缩放（`Cmd/Ctrl+Shift+Plus/Minus/0`）与三轴文字缩放（`Cmd/Ctrl+Plus/Minus/0`：正文/代码/终端 + `TerminalTabContent` xterm 同步）分离；（b）`git-diff-service.ts` 注入 `GIT_OPTIONAL_LOCKS: '0'` 与 `diff-directory-watch.ts` Linked worktree 外部元数据 + `origin/main` 监听（并在 `workspace-watcher.ts` 显式注入 `watchDir`）；（c）`gpt-6.2-sol` / `gpt-6.2-astra` 能力与 `openai-reasoning-6.2`、`qwen-token-plan` OpenAI 兼容迁移与 Qwen 4 / 3.8 模型及 DashScope 按量模型拉取、HTTP `524` 重试归类。
+   - `0.19.89` 已完成验证：6 个工作区 `bun run typecheck` 全部通过；`bun test --parallel=4`（沙箱内）120 个文件 756 项通过 749 项（含 `workspace-watcher-lifecycle.test.ts` 与新增 `app-window-zoom.test.ts`、`diff-directory-watch.test.ts`、`qwen-models.test.ts` 及扩展后的 `shortcut-defaults.test.ts`、`pi-codex-fast-mode.test.ts`、`network-errors.test.ts`、`anthropic-adapter.test.ts`），仅 `pi-mcp-recovery.test.ts` 中 7 项回环端口用例受沙箱限制返回 `EPERM`，允许回环后单独重跑该文件 9/9 通过（35 expects）；`bun run electron:build` 退出码 0；`git diff --check` 与静态 `any`/云端 URL 检索无命中。尚未运行 Electron 启动后界面交互点击冒烟。
+4. **剩余差异按证据归类，不按接口名逐个实现。** 分为已等价、待实现、范围外、需要其他平台/运行证据。PR/变更请求属于后置集成；macOS 权限引导、多显示器混合 DPI 及 Windows 实机能力分别验证。Proma 云登录、计费、订阅、CDN 驱动更新及企业 Skills 不移植；不复制正式版代码和资产，不用 macOS 静态结果宣布 Windows 通过。其余验收门槛见 [spec.md](../../spec.md) 第 2、12、15、32—38 节。
+
+### 验证与复现
+
+从仓库根目录执行；如果 `bun` 不在 `PATH`，记录时可用的 Bun `1.4.4` 在 `/private/tmp/proma-rea-install.YCqBKknc/bun-darwin-aarch64/bun`，使用前确认仍存在。全量测试需允许本地回环端口和文件系统事件；使用隔离进程，避免不同测试文件共享 mock。
+
+```bash
+bun test apps/electron/src/renderer/lib/bundled-release-notes.test.ts
+bun run typecheck
+bun test --parallel=4
+CLANG_MODULE_CACHE_PATH="$TMPDIR/proma-clang-cache" SWIFT_MODULE_CACHE_PATH="$TMPDIR/proma-swift-cache" bun run electron:build
+git diff --check
+```
+
+最近一次完整代码验证为 `0.19.89` / `@proma/shared` `0.1.85` / `@proma/core` `0.2.18`（`0.19.90` 仅更新交接总览文档与 `apps/electron` patch 版本，未重跑代码测试套件）：6 个工作区 `bun run typecheck` 全部通过（退出码 0）；沙箱内 `bun test --parallel=4` 在 120 个文件中 749/756 项通过（含 `workspace-watcher-lifecycle.test.ts` 与全部新增/扩展 BDD 测试），仅 `pi-mcp-recovery.test.ts` 的 7 项本地回环端口用例受沙箱限制返回 `EPERM`，允许回环请求后单独重跑该文件 9/9 通过（35 expects）；`CLANG_MODULE_CACHE_PATH=/tmp/proma-clang-cache SWIFT_MODULE_CACHE_PATH=/tmp/proma-swift-cache bun run electron:build` 退出码 0（24.00 s）；`git diff --check` 与静态 `any`/云端 URL 检索无命中。尚未对离线更新日志、浮窗预览、「历史 Chat」设置页及缩放快捷键执行 Electron 启动后的原生 GUI 交互点击与视觉冒烟：接手后请使用隔离配置实测 GUI 交互、多屏混合 DPI 与深浅主题，不要覆盖 `/Applications/Proma.app`。
+
+> 历史记录（`0.19.84`）：定向测试 2 项通过、6 个工作区类型检查通过、独立进程全量测试 717 项通过、macOS Electron 构建通过，并在 renderer 产物中确认了随包 Markdown；早期普通 `bun test` 曾出现 mock 串扰，沙箱内另有监听和端口失败。可选历史日志为 `/private/tmp/proma-02280-offline-changelog-tests-isolated.log` 和 `/private/tmp/proma-02280-offline-changelog-build.log`。
 
 ## 2026-11-18 交付记录
 
@@ -73,8 +133,12 @@ S7 提交前复跑了会话管理、记忆服务与集成、权限服务三组 B
 | S6-01 | Windows x64 / macOS arm64 驱动及窗口工具 | Windows 已通过隔离实例冒烟。macOS 已实测系统授权、窗口选择和逐次确认，见规格第 29、32 节 |
 | S6-02 | 会话窗口预览、低频回退、激活、停止、重试与默认 Skill | Windows 已实测两帧及停止清屏。macOS 已实测实时预览与撤权清理，多屏 DPI 待验，见规格第 30、32 节 |
 | S7-01 | 默认 Skills、旧配置与会话兼容，补验记忆、权限、Automation 和 Collaboration，应用 `0.19.82` | macOS arm64 新装、覆盖升级、重启和两项工作流通过，见规格第 31、33—34 节。签名发布和自动更新待验 |
+| `0.19.84`—`0.19.86` | 离线更新日志 Dialog、旧记忆归档历史桶兼容、Agent 活动浮窗预览策略与 UI | 单测、`typecheck` 与构建已在 `0.19.89` 基线一并验证；GUI 交互点击与深浅主题视觉冒烟待测 |
+| `0.19.87` | 显式网络重连与代理/MCP/受管浏览器代次失效、四层 IPC 与设置 UI | 单元测试、真实 preload 探针及允许回环下 `pi-mcp-recovery.test.ts` 9/9 通过，见规格第 36 节 |
+| `0.19.88` | 移除完整 Chat 模式与旧入口、拆分 `ATTACHMENT_IPC_CHANNELS`、落地只读「历史 Chat」兼容服务/IPC/UI | BDD、真实 preload 探针、`typecheck` 与 `electron:build` 通过，见规格第 37 节；GUI 交互点击冒烟待测 |
+| `0.19.89` | `0.22.80 -> 0.22.97` 差异归档；整窗/三轴文字缩放分离、Linked worktree Diff 监听与锁隔离、GPT-6.2/Qwen4 迁移与 `524` 重试 | `typecheck` 6/6、`bun test --parallel=4` 749/756（+回环独立重跑 9/9）、`electron:build` 退出码 0，见规格第 38 节；GUI 快捷键视觉冒烟待测 |
 
-M1 和 S5 的 macOS 实机验收通过。M2 仍需 S5/S6 的 Windows 实机验收，M3 仍需 S7 发布验收。
+M1 和 S5 的 macOS 实机验收通过。待完成事项：GUI 交互点击冒烟（离线日志/浮窗预览/历史 Chat 设置/缩放快捷键）、多屏混合 DPI、M2（Windows 实机验收）与 M3（正式签名发布与自动更新验收）。
 
 ## S5 验收与回退
 
@@ -100,6 +164,11 @@ M1 和 S5 的 macOS 实机验收通过。M2 仍需 S5/S6 的 Windows 实机验�
 | 原子写 | `apps/electron/src/main/lib/safe-file.ts`，包含原始字节原子写和排他新增提交 |
 | 文件交付 | `main/lib/{present-service,present-ipc,present-runtime}.ts`、`renderer/components/agent/PresentedResources.tsx` |
 | Vault 与浏览器展示 | `main/lib/{vault-service,browser-preview-service,browser-controller}.ts`、`renderer/components/vault/{VaultView.tsx,useVaultDirectoryPages.ts}` |
+| 离线日志与浮窗预览 | `main/lib/agent-memory-legacy-history.ts`、`renderer/components/settings/{BundledReleaseNotesDialog,AboutSettings,ReleaseNotesViewer}.tsx`、`renderer/lib/bundled-release-notes.ts`、`renderer/components/agent/{AgentFloatingPreviews.tsx,floating-preview-policy.ts}` |
+| 显式网络重连 | `main/lib/network/{network-reconnect,network-monitor,network-errors,network-ipc}.ts`、`renderer/components/settings/NetworkDiagnosticsSettings.tsx` |
+| 只读历史 Chat 与通用附件 | `packages/shared/src/types/{attachments,legacy-chat}.ts`、`main/lib/legacy-chat-{service,ipc}.ts`、`renderer/components/settings/{LegacyChatSettings.tsx,legacy-chat-helpers.ts}`、`renderer/atoms/agent-atoms.ts` |
+| 整窗与三轴文字缩放 | `types/settings.ts`、`main/lib/{app-window-zoom,font-sizes}.ts`、`main/{index,ipc,menu}.ts`、`renderer/atoms/markdown-font-size.ts`、`renderer/components/tabs/TerminalTabContent.tsx`、`renderer/lib/shortcut-{defaults,registry}.ts` |
+| Linked Worktree Diff 与 Qwen / GPT-6.2 适配 | `main/lib/{diff-directory-watch,git-diff-service,workspace-watcher,qwen-models,channel-manager}.ts`、`main/lib/adapters/{pi-model-registry,pi-provider-compat}.ts`、`packages/shared/src/{utils/qwen-model-capabilities,utils/model-family,utils/context-window,types/agent,types/channel,types/reasoning-profile}.ts`、`packages/core/src/providers/` |
 
 上表 `main/`、`renderer/`、`preload/` 均在 `apps/electron/src/` 内；花括号只是文件定位简写，不是 PowerShell 命令。
 
