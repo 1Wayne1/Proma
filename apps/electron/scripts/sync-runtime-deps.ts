@@ -44,7 +44,6 @@ export interface SyncRuntimeDepsResult {
 }
 
 export const EXTERNAL_RUNTIME_PACKAGES: readonly string[] = [
-  // Pi 0.86 的已发布入口不再包含 server/client 实验代码；pi-server 仅是其开发依赖。
   '@earendil-works/pi-coding-agent',
   '@earendil-works/pi-agent-core',
   '@earendil-works/pi-ai',

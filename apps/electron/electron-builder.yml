@@ -24,7 +24,7 @@ asarUnpack:
   - "node_modules/@mariozechner/**"
   - "node_modules/@napi-rs/**"
   - "node_modules/@earendil-works/pi-tui/native/**"
-  # Pi 0.85 的 chord 会在运行时加载 esbuild；其平台二进制必须位于 ASAR 外。
+  # esbuild 的平台二进制需要位于 ASAR 外，才能由运行时启动。
   - "**/node_modules/esbuild/**"
   - "**/node_modules/@esbuild/**"
   - "node_modules/sharp/**"

@@ -1,0 +1,33 @@
+diff --git a/dist/utils/retry.js b/dist/utils/retry.js
+index dae863cfd9f141d27f781754ef0ada914dd45c5f..832274ca7e62c7132f7cbe24312b0ce9ee5d22b3 100644
+--- a/dist/utils/retry.js
++++ b/dist/utils/retry.js
+@@ -52,6 +52,7 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
+     // Other gateway upstream failures relayed as `response.failed` error codes (#10920).
+     "upstream.?request.?failed",
+     "upstream_stream_read_error",
++    "\\bstream_read_error\\b",
+     "stream was interrupted",
+     "http/?2 stream failed",
+     // Network, proxy, and fetch transport failures. This includes OpenAI Codex
+@@ -62,7 +63,10 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
+     "connection.?refused",
+     "connection.?lost",
+     "other side closed",
++    "peer closed connection",
++    "incomplete chunked read",
+     "fetch failed",
++    "failed to fetch",
+     // node-fetch system errors, e.g. the Google ADC OAuth token refresh used by
+     // google-vertex. The reason is often empty (#10996).
+     "request to \\S+ failed, reason:",
+@@ -85,7 +89,9 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
+     "ended without",
+     "stream ended before message_stop",
+     "stream ended before a terminal response event",
++    "stream ended before (?:a )?terminal(?: response)? event",
+     "http2 request did not get a response",
++    "unexpected non-whitespace character after JSON",
+     // Codex CLI mid-stream disconnect, relayed by proxies that wrap the Codex CLI,
+     // e.g. "stream disconnected before completion: stream closed before response.completed" (#11057).
+     "stream disconnected before completion",
