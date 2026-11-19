@@ -111,7 +111,7 @@ export function broadcastChanged(): void {
  * 执行一次定时任务：新建子会话 + headless 运行
  *
  * @param automation 任务定义
- * @param manual 是否手动「立即运行」（手动运行也走同一路径，但不影响调度计时由 appendRun 统一推进）
+ * @param manual 是否手动「立即运行」。手动运行保留原调度时间。
  */
 export async function runAutomation(automation: Automation, manual = false): Promise<void> {
   if (runningAutomations.has(automation.id)) {
@@ -187,7 +187,7 @@ export async function runAutomation(automation: Automation, manual = false): Pro
           durationMs: Date.now() - runAt,
           error,
         }
-        appendRun(automation.id, run)
+        appendRun(automation.id, run, manual)
         broadcastChanged()
         void notifyAutomationRunFinished({ automation, run }).catch((err) => {
           console.error(`[定时任务] 发送完成通知失败: ${automation.name}`, err)
@@ -243,7 +243,7 @@ export async function runAutomation(automation: Automation, manual = false): Pro
       durationMs: Date.now() - runAt,
       error: err instanceof Error ? err.message : '未知错误',
     }
-    appendRun(automation.id, run)
+    appendRun(automation.id, run, manual)
     broadcastChanged()
     void notifyAutomationRunFinished({ automation, run }).catch((notifyError) => {
       console.error(`[定时任务] 发送异常通知失败: ${automation.name}`, notifyError)

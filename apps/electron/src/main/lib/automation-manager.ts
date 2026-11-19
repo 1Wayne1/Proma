@@ -575,13 +575,13 @@ export function deleteAutomation(id: string): boolean {
  * 记录一次运行结果并推进下次触发时间
  *
  * 由调度器在运行完成/失败/跳过后调用。
- * - 成功/失败：从「现在」起算下次触发时间，并累加 runCount
+ * - 成功/失败：累加 runCount。定时触发从「现在」起算下次触发时间，手动运行保留原时间。
  * - 跳过：不动 nextRunAt、不计入 runCount——否则任务因重入持续跳过时，每次跳过都会把下次触发再推一个完整间隔，
  *   实际周期会被拉成 N×interval。保留原 nextRunAt 让下一个 tick 立刻有机会再次尝试。
  * - 成功/跳过：清零连续失败计数；失败：累加（调度器据此判断是否自动暂停）
  * - once 跑完一次 / 达到 maxRuns 上限：自动停用并标记 completedAt，区别于手动暂停
  */
-export function appendRun(id: string, run: AutomationRun): Automation | undefined {
+export function appendRun(id: string, run: AutomationRun, preserveSchedule = false): Automation | undefined {
   const index = readIndex()
   const target = index.automations.find((a) => a.id === id)
   if (!target) return undefined
@@ -595,7 +595,7 @@ export function appendRun(id: string, run: AutomationRun): Automation | undefine
   if (run.status !== 'skipped') {
     target.lastRunAt = run.runAt
     target.runCount = (target.runCount ?? 0) + 1
-    target.nextRunAt = computeNextRunAt(target, now)
+    if (!preserveSchedule) target.nextRunAt = computeNextRunAt(target, now)
   }
 
   if (run.status === 'error') {
