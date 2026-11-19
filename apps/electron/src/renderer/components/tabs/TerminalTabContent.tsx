@@ -1,8 +1,10 @@
 import * as React from 'react'
+import { useAtomValue } from 'jotai'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import type { TerminalOutputEvent } from '@proma/shared'
 import '@xterm/xterm/css/xterm.css'
+import { fontSizesAtom } from '@/atoms/markdown-font-size'
 import { detectIsWindows } from '@/lib/platform'
 import { getWindowsPtyOptions } from '@/lib/terminal-windows-pty'
 
@@ -39,8 +41,12 @@ export function TerminalTabContent({ terminalId, sessionId, cwd, agentOwned, ter
   const terminalRef = React.useRef<Terminal>()
   const fitAddonRef = React.useRef<FitAddon>()
   const lastPtyDimensionsRef = React.useRef<{ cols: number; rows: number }>()
+  const fitRef = React.useRef<() => void>()
   // StrictMode 会模拟一次卸载再挂载；用单调 generation 区分真实关闭与这次重挂载。
   const lifecycleGenerationRef = React.useRef(0)
+  const { terminal: terminalFontSize } = useAtomValue(fontSizesAtom)
+  const terminalFontSizeRef = React.useRef(terminalFontSize)
+  terminalFontSizeRef.current = terminalFontSize
 
   React.useEffect(() => {
     const host = hostRef.current
@@ -53,7 +59,7 @@ export function TerminalTabContent({ terminalId, sessionId, cwd, agentOwned, ter
       // 兼容路径，避免 resize 或输入回车时与 ConPTY 重复重排而导致光标上跳。
       reflowCursorLine: false,
       fontFamily: TERMINAL_FONT_FALLBACKS,
-      fontSize: 13,
+      fontSize: terminalFontSizeRef.current,
       lineHeight: 1.25,
       scrollback: 5_000,
       windowsPty: detectIsWindows() ? getWindowsPtyOptions() : undefined,
@@ -87,6 +93,7 @@ export function TerminalTabContent({ terminalId, sessionId, cwd, agentOwned, ter
         // 终端字体尚未完成测量时忽略；下一次布局变化会再次尝试。
       }
     }
+    fitRef.current = fit
     const resizeObserver = new ResizeObserver(fit)
     resizeObserver.observe(host)
     // 同步完成首帧测量，创建 PTY 时直接使用真实行列，避免 Windows 首次 80×24 → 实际尺寸的重排。
@@ -186,6 +193,7 @@ export function TerminalTabContent({ terminalId, sessionId, cwd, agentOwned, ter
       terminal.dispose()
       terminalRef.current = undefined
       fitAddonRef.current = undefined
+      fitRef.current = undefined
       if (terminateOnUnmount) {
         const killIfStillUnmounted = (): void => {
           if (lifecycleGenerationRef.current === lifecycleGeneration) {
@@ -199,6 +207,15 @@ export function TerminalTabContent({ terminalId, sessionId, cwd, agentOwned, ter
       }
     }
   }, [agentOwned, cwd, sessionId, terminalId, terminateOnUnmount])
+
+  // 文字缩放变更时即时更新终端字号并重算列/行数，不重建 PTY。
+  React.useEffect(() => {
+    const terminal = terminalRef.current
+    if (!terminal) return
+    if (terminal.options.fontSize === terminalFontSize) return
+    terminal.options.fontSize = terminalFontSize
+    fitRef.current?.()
+  }, [terminalFontSize])
 
   return (
     <div className="h-full w-full overflow-hidden bg-[#111113] p-2">

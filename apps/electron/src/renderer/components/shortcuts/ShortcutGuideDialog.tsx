@@ -38,6 +38,9 @@ const SHORTCUT_DISPLAY_ORDER: Record<ShortcutCategory, readonly string[]> = {
   app: [
     'new-session',
     'toggle-sidebar',
+    'font-size-increase',
+    'font-size-decrease',
+    'font-size-reset',
     'zoom-in',
     'zoom-out',
     'reset-zoom',

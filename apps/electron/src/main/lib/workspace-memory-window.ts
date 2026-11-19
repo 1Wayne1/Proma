@@ -2,6 +2,7 @@ import { app, BrowserWindow, screen, shell } from 'electron'
 import { existsSync } from 'node:fs'
 import { AGENT_IPC_CHANNELS } from '@proma/shared'
 import { join } from 'node:path'
+import { installAppWindowZoomShortcuts } from './app-window-zoom'
 
 const DEFAULT_WIDTH = 980
 const DEFAULT_HEIGHT = 720
@@ -72,6 +73,7 @@ function createWorkspaceMemoryWindow(workspaceSlug: string, relativePath?: strin
     },
     ...titleBarOptions,
   })
+  installAppWindowZoomShortcuts(win.webContents)
   windowsByWorkspace.set(workspaceSlug, win)
 
   const isDev = !app.isPackaged

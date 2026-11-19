@@ -9,6 +9,7 @@ import { app, BrowserWindow, screen, shell } from 'electron'
 import type { Rectangle } from 'electron'
 import { basename, join } from 'path'
 import type { DetachedPreviewWindowData, DetachedPreviewWindowInput } from '@proma/shared'
+import { installAppWindowZoomShortcuts } from './app-window-zoom'
 
 interface PresentationPreview {
   requestId: string
@@ -127,6 +128,7 @@ export function openDetachedPreviewWindow(
   })
 
   previewWindowsById.set(id, win)
+  installAppWindowZoomShortcuts(win.webContents)
   const senderId = win.webContents.id
   const abort = (): void => { if (!win.isDestroyed()) win.close() }
   if (presentation) {

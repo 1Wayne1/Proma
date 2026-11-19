@@ -1,4 +1,4 @@
-import { isGpt6AstraFamily, isGpt6LunaFamily, isGpt6SolFamily } from '../utils/model-family'
+import { isGpt62ReasoningModel, isGpt6AstraFamily, isGpt6LunaFamily, isGpt6SolFamily } from '../utils/model-family'
 import type { ProviderType } from './channel'
 import type { AgentThinkingLevel } from './agent'
 
@@ -21,6 +21,7 @@ export function inferReasoningTransport(provider: ProviderType | undefined): Rea
     case 'zhipu':
     case 'doubao-api':
     case 'qwen':
+    case 'qwen-token-plan':
     case 'custom':
       return 'openai-completions'
     case 'openai-codex':
@@ -50,7 +51,21 @@ export interface ReasoningEncoding {
 }
 
 export interface ReasoningProfile {
-  id: 'deepseek-v4-flash' | 'deepseek-flash' | 'deepseek-v4-pro' | 'kimi-k3' | 'glm-5.2' | 'glm-5.3' | 'openai-reasoning-standard' | 'openai-reasoning-max' | 'openai-reasoning-astra' | 'openai-reasoning-sol-luna'
+  id:
+    | 'deepseek-v4-flash'
+    | 'deepseek-flash'
+    | 'deepseek-v4-pro'
+    | 'kimi-k3'
+    | 'glm-5.2'
+    | 'glm-5.3'
+    | 'qwen4-max'
+    | 'qwen4-max-preview'
+    | 'qwen3.8'
+    | 'openai-reasoning-standard'
+    | 'openai-reasoning-max'
+    | 'openai-reasoning-astra'
+    | 'openai-reasoning-sol-luna'
+    | 'openai-reasoning-6.2'
   levels: readonly AgentThinkingLevel[]
   defaultLevel: AgentThinkingLevel
   normalize(level: AgentThinkingLevel | undefined): AgentThinkingLevel
@@ -157,6 +172,20 @@ const OPENAI_STANDARD_EFFORT_MAP: ReasoningEffortMap = {
 const OPENAI_MAX_EFFORT_MAP: ReasoningEffortMap = {
   ...OPENAI_STANDARD_EFFORT_MAP,
   max: 'max',
+}
+
+const QWEN4_MAX_EFFORT_MAP: ReasoningEffortMap = {
+  off: 'none',
+  minimal: 'low',
+  medium: 'high',
+  max: 'xhigh',
+}
+const QWEN_MEDIUM_EFFORT_MAP: ReasoningEffortMap = {
+  off: 'none',
+  minimal: 'low',
+  medium: 'medium',
+  high: 'xhigh',
+  max: 'xhigh',
 }
 
 function normalizeDeepSeekV4Level(level: AgentThinkingLevel | undefined): AgentThinkingLevel {
@@ -338,6 +367,46 @@ const OPENAI_SOL_LUNA_PROFILE: ReasoningProfile = {
   },
 }
 
+const OPENAI_62_PROFILE: ReasoningProfile = {
+  ...OPENAI_ASTRA_PROFILE,
+  id: 'openai-reasoning-6.2',
+}
+
+const QWEN4_MAX_PROFILE: ReasoningProfile = {
+  id: 'qwen4-max',
+  levels: ['off', 'low', 'high', 'xhigh'],
+  defaultLevel: 'high',
+  normalize: (level) => {
+    if (level === 'off') return 'off'
+    if (level === 'minimal' || level === 'low') return 'low'
+    if (level === 'xhigh' || level === 'max') return 'xhigh'
+    return 'high'
+  },
+  encodings: {
+    'openai-completions': { kind: 'openai-reasoning-effort', effortMap: QWEN4_MAX_EFFORT_MAP },
+  },
+}
+
+function createQwenMediumProfile(id: 'qwen4-max-preview' | 'qwen3.8'): ReasoningProfile {
+  return {
+    id,
+    levels: ['off', 'low', 'medium', 'xhigh'],
+    defaultLevel: 'xhigh',
+    normalize: (level) => {
+      if (level === 'off') return 'off'
+      if (level === 'minimal' || level === 'low') return 'low'
+      if (level === 'medium') return 'medium'
+      return 'xhigh'
+    },
+    encodings: {
+      'openai-completions': { kind: 'openai-reasoning-effort', effortMap: QWEN_MEDIUM_EFFORT_MAP },
+    },
+  }
+}
+
+const QWEN4_MAX_PREVIEW_PROFILE = createQwenMediumProfile('qwen4-max-preview')
+const QWEN38_PROFILE = createQwenMediumProfile('qwen3.8')
+
 export const REASONING_PROFILES: readonly ReasoningProfile[] = [
   DEEPSEEK_V4_FLASH_PROFILE,
   DEEPSEEK_FLASH_PROFILE,
@@ -345,20 +414,39 @@ export const REASONING_PROFILES: readonly ReasoningProfile[] = [
   K3_PROFILE,
   GLM_52_PROFILE,
   GLM_53_PROFILE,
+  QWEN4_MAX_PROFILE,
+  QWEN4_MAX_PREVIEW_PROFILE,
+  QWEN38_PROFILE,
   OPENAI_STANDARD_PROFILE,
   OPENAI_MAX_PROFILE,
   OPENAI_ASTRA_PROFILE,
   OPENAI_SOL_LUNA_PROFILE,
+  OPENAI_62_PROFILE,
 ]
 
 /** 仅按模型 ID 匹配，再以实际 transport 确认该模型是否有已验证的协议 encoding。 */
 export function resolveReasoningProfile(input: ResolveReasoningProfileInput): ReasoningProfile | undefined {
   const modelId = input.modelId?.toLowerCase()
   if (!modelId) return undefined
+  const leafModelId = modelId.includes('/') ? modelId.slice(modelId.lastIndexOf('/') + 1) : modelId
+
+  const qwenProfile = leafModelId === 'qwen4-max'
+    ? QWEN4_MAX_PROFILE
+    : leafModelId === 'qwen4-max-preview'
+      ? QWEN4_MAX_PREVIEW_PROFILE
+      : leafModelId === 'qwen3.8-max' || leafModelId === 'qwen3.8-flash'
+        ? QWEN38_PROFILE
+        : undefined
+  if (qwenProfile) {
+    return qwenProfile.encodings[input.transport] ? qwenProfile : undefined
+  }
 
   const isOpenAITransport = input.transport === 'openai-completions' || input.transport === 'openai-responses'
   const isOpenAIReasoningModel = !modelId.endsWith('-chat-latest')
     && (modelId.startsWith('gpt-5') || /^(o1|o3|o4)(?:-|$)/.test(modelId))
+  if (isGpt62ReasoningModel(modelId)) {
+    return OPENAI_62_PROFILE.encodings[input.transport] ? OPENAI_62_PROFILE : undefined
+  }
   if (isGpt6AstraFamily(modelId)) {
     return OPENAI_ASTRA_PROFILE.encodings[input.transport] ? OPENAI_ASTRA_PROFILE : undefined
   }

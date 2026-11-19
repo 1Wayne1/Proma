@@ -36,6 +36,9 @@ export function inferCodexAlignedGPT5ContextWindow(modelId: string | undefined):
 
   const model = modelId?.toLowerCase().replace(/\[1m\]$/i, '')
   switch (model) {
+    // Sol follows the Codex 500K default; Astra uses Proma's explicit 372K override.
+    case 'gpt-6.2-sol': return 500_000
+    case 'gpt-6.2-astra': return CODEX_GPT_6_CONTEXT_WINDOW
     case 'gpt-5.4-mini': return CODEX_GPT_54_MINI_CONTEXT_WINDOW
     case 'gpt-5.4':
     case 'gpt-5.5': return CODEX_GPT_54_55_CONTEXT_WINDOW
@@ -72,6 +75,7 @@ const ONE_MILLION_CONTEXT_RULES = {
   kimi: ['k3'],
   // 通义千问
   qwen: [
+    'qwen4',
     'qwen3.8',
     'qwen3.7',
     'qwen3.6-plus',

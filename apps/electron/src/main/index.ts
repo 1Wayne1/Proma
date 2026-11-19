@@ -82,6 +82,7 @@ import { initializeRuntime } from './lib/runtime-init'
 import { seedDefaultSkills } from './lib/config-paths'
 import { upgradeDefaultSkillsInWorkspaces } from './lib/agent-workspace-manager'
 import { hasActiveAgentSessions, stopAllAgents } from './lib/agent-service'
+import { installAppWindowZoomShortcuts } from './lib/app-window-zoom'
 import { stopAllTerminals } from './lib/terminal-service'
 import { disposePiMcpConnections } from './lib/adapters/pi-mcp-tools'
 import { browserController } from './lib/browser-controller'
@@ -371,22 +372,6 @@ export function getMainWindow(): BrowserWindow | null {
   return getStoredMainWindow()
 }
 
-function installWindowsZoomInFallback(win: BrowserWindow): void {
-  if (process.platform !== 'win32') return
-
-  win.webContents.on('before-input-event', (event, input) => {
-    if (input.type !== 'keyDown' || !input.control || input.alt || input.meta) return
-
-    // Windows 下主键盘的 Ctrl++ 常会以 Ctrl+= 上报；小键盘加号也需要兜底。
-    const key = input.key.toLowerCase()
-    if (!['=', '+', 'numadd', 'add'].includes(key)) return
-
-    event.preventDefault()
-    const currentZoomLevel = win.webContents.getZoomLevel()
-    win.webContents.setZoomLevel(Math.min(currentZoomLevel + 0.5, 9))
-  })
-}
-
 /**
  * 检查窗口是否在可用显示器范围内
  * 处理外接显示器断开后窗口位于不可见区域的情况
@@ -499,7 +484,7 @@ function createWindow(): void {
   const rendererPath = join(__dirname, 'renderer', 'index.html')
   const rendererEntryUrl = isDev ? 'http://127.0.0.1:5173' : pathToFileURL(rendererPath).toString()
   setStoredMainWindow(mainWindow, rendererEntryUrl)
-  installWindowsZoomInFallback(mainWindow)
+  installAppWindowZoomShortcuts(mainWindow.webContents)
   browserController.setOwnerWindow(mainWindow)
 
   // Load the renderer

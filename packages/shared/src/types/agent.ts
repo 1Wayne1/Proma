@@ -1,4 +1,10 @@
-import { isGpt6AstraFamily, isGpt6LunaFamily, isGpt6SolFamily } from '../utils/model-family'
+import {
+  isGpt61SolFamily,
+  isGpt62ReasoningModel,
+  isGpt6AstraFamily,
+  isGpt6LunaFamily,
+  isGpt6SolFamily,
+} from '../utils/model-family'
 import type { ProviderType } from './channel'
 
 /**
@@ -89,11 +95,15 @@ export const CODEX_FAST_MODE_MODEL_IDS = [
   'gpt-6-astra',
   'gpt-6-sol',
   'gpt-6-luna',
+  'gpt-6.1-sol',
+  'gpt-6.2-sol',
+  'gpt-6.2-astra',
 ] as const
 
 /** 模型 ID 是否可通过 ChatGPT Codex OAuth 使用 Fast Mode。 */
 export function isCodexFastModeSupportedModel(modelId: string | undefined): boolean {
-  return isGpt6AstraFamily(modelId)
+  return isGpt62ReasoningModel(modelId)
+    || isGpt6AstraFamily(modelId)
     || isGpt6SolFamily(modelId)
     || isGpt6LunaFamily(modelId)
     || (modelId !== undefined && (CODEX_FAST_MODE_MODEL_IDS as readonly string[]).includes(modelId.toLowerCase()))
@@ -107,7 +117,8 @@ export function isCodexSpeed(value: unknown): value is CodexSpeed {
 }
 
 export function getCodexSpeeds(modelId: string | undefined): readonly CodexSpeed[] {
-  if (isGpt6AstraFamily(modelId) || /^gpt-6\.1-sol(?:-\d+)?$/.test(modelId?.trim().toLowerCase().replace(/\[1m\]$/, '') ?? '')) return CODEX_SPEEDS
+  const normalized = modelId?.trim().toLowerCase().replace(/\[1m\]$/, '') ?? ''
+  if (normalized === 'gpt-6.2-sol' || isGpt6AstraFamily(modelId) || isGpt61SolFamily(modelId)) return CODEX_SPEEDS
   return isCodexFastModeSupportedModel(modelId) ? ['standard', 'fast'] : ['standard']
 }
 

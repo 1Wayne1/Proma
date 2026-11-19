@@ -59,11 +59,12 @@ import {
 } from './atoms/ui-preferences'
 import {
   markdownFontSizeAtom,
-  applyMarkdownFontSizeToDOM,
+  fontSizesAtom,
+  applyFontSizesToDOM,
 } from './atoms/markdown-font-size'
 import { useGlobalAgentListeners } from './hooks/useGlobalAgentListeners'
 import { userProfileAtom } from './atoms/user-profile'
-import { DEFAULT_MARKDOWN_FONT_SIZE } from '../types'
+import { DEFAULT_MARKDOWN_FONT_SIZE, resolveFontSizes } from '../types'
 import { PlanningQuickCapture } from './components/planning/PlanningQuickCapture'
 import { tabsAtom, activeTabIdAtom, getPersistableTabState } from './atoms/tab-atoms'
 import type { TabItem } from './atoms/tab-atoms'
@@ -677,29 +678,36 @@ function UiPreferencesInitializer(): null {
 }
 
 /**
- * Markdown 字号初始化组件
+ * 文字字号初始化组件
  *
- * 从主进程加载字号档位，写入 :root CSS 变量驱动 Markdown 预览。
+ * 从主进程加载三类字号与 Markdown 字号档位，写入 :root CSS 变量并同步跨窗口变化。
  */
 function MarkdownFontSizeInitializer(): null {
   const setMarkdownFontSize = useSetAtom(markdownFontSizeAtom)
+  const setFontSizes = useSetAtom(fontSizesAtom)
 
   useEffect(() => {
     let receivedChange = false
     let disposed = false
-    const apply = (size = DEFAULT_MARKDOWN_FONT_SIZE): void => {
-      setMarkdownFontSize(size)
-      applyMarkdownFontSizeToDOM(size)
+    const apply = (settings: Parameters<typeof resolveFontSizes>[0]): void => {
+      const sizes = resolveFontSizes(settings)
+      setFontSizes(sizes)
+      applyFontSizesToDOM(sizes)
+      if (settings?.markdownFontSize) {
+        setMarkdownFontSize(settings.markdownFontSize)
+      } else {
+        setMarkdownFontSize(DEFAULT_MARKDOWN_FONT_SIZE)
+      }
     }
     const unsubscribe = window.electronAPI.onLiveLocalPreferencesChanged(settings => {
       receivedChange = true
-      apply(settings.markdownFontSize)
+      apply(settings)
     })
     void window.electronAPI.getSettings().then(settings => {
-      if (!disposed && !receivedChange) apply(settings.markdownFontSize)
+      if (!disposed && !receivedChange) apply(settings)
     }).catch(console.error)
     return () => { disposed = true; unsubscribe() }
-  }, [setMarkdownFontSize])
+  }, [setFontSizes, setMarkdownFontSize])
 
   return null
 }

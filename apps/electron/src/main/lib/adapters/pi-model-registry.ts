@@ -14,6 +14,7 @@ import {
   inferContextWindow,
   inferCodexAlignedGPT5ContextWindow,
   getGeminiModelCapability,
+  getQwenModelCapability,
   isGpt6AstraFamily,
   isGpt6LunaFamily,
   isGpt6SolFamily,
@@ -366,7 +367,25 @@ function applyPiModelCapabilityOverrides(model: PiCatalogModel | undefined): PiC
   return { ...model, input, ...(thinkingLevelMap ? { thinkingLevelMap } : {}) }
 }
 
+const CODEX_GPT_62_MODELS: ReadonlyArray<{ id: string; name: string }> = [
+  { id: 'gpt-6.2-sol', name: 'GPT-6.2 Sol' },
+  { id: 'gpt-6.2-astra', name: 'GPT-6.2 Astra' },
+]
+
 const CODEX_MODEL_PATCHES: PiCatalogModelPatch[] = [
+  ...CODEX_GPT_62_MODELS.map(({ id, name }): PiCatalogModelPatch => ({
+    id,
+    name,
+    api: 'openai-codex-responses',
+    provider: 'openai-codex',
+    baseUrl: CODEX_BASE_URL,
+    reasoning: true,
+    thinkingLevelMap: compilePiReasoningCapabilities('openai-responses', id)?.thinkingLevelMap,
+    input: ['text', 'image'],
+    cost: ZERO_MODEL_COST,
+    contextWindow: id === 'gpt-6.2-astra' ? CODEX_GPT_6_CONTEXT_WINDOW : 500_000,
+    maxTokens: CODEX_MAX_TOKENS,
+  })),
   {
     id: 'gpt-6-astra',
     name: 'GPT-6 Astra',
@@ -473,6 +492,7 @@ function normalizePiApi(provider: ProviderType): Api {
     case 'zhipu':
     case 'doubao-api':
     case 'qwen':
+    case 'qwen-token-plan':
     case 'custom':
       return 'openai-completions'
     case 'openai-responses':
@@ -516,6 +536,9 @@ function candidatePiProviders(provider: ProviderType): KnownProvider[] {
       return ['xiaomi']
     case 'xiaomi-token-plan':
       return ['xiaomi-token-plan-cn', 'xiaomi-token-plan-sgp', 'xiaomi-token-plan-ams', 'xiaomi']
+    case 'qwen':
+    case 'qwen-token-plan':
+      return ['qwen-token-plan-cn', 'qwen-token-plan', 'qwen-token-plan-individual']
     default:
       return []
   }
@@ -693,6 +716,7 @@ export async function resolvePiReasoningCapability(
 
 async function resolvePiModelDefaults(input: PiAgentQueryOptions): Promise<PiModelDefaults> {
   const catalogModel = input.model ? await findPiCatalogModel(input.provider, input.model) : undefined
+  const qwenCapability = getQwenModelCapability(input.model)
   const codexAlignedCapabilities = getCodexAlignedGPT5Capabilities(input.model)
   const api = resolvePiApi(input.provider)
   const providerSpecificCapabilities = compilePiReasoningCapabilities(api, input.model)
@@ -717,17 +741,17 @@ async function resolvePiModelDefaults(input: PiAgentQueryOptions): Promise<PiMod
       : providerSpecificCapabilities?.compat,
     input: catalogModel ? [...catalogModel.input] : ['text', 'image'],
     cost: catalogModel ? { ...catalogModel.cost } : { ...ZERO_MODEL_COST },
-    // Codex 对齐策略优先；其他模型仍保留 catalog 与 shared inference 中更大的已验证能力。
-    contextWindow: codexAlignedCapabilities?.contextWindow ?? Math.max(catalogContextWindow, inferredContextWindow),
+    // Codex 对齐策略与 Qwen 最新官方规格优先；其他模型保留 catalog 与 shared inference 中更大的已验证能力。
+    contextWindow: codexAlignedCapabilities?.contextWindow ?? qwenCapability?.contextWindow ?? Math.max(catalogContextWindow, inferredContextWindow),
     // Pi catalog 缺少时，GLM-5.3 系列仍按官方 128K 输出上限注册。
-    maxTokens: isVolcengineGlm5x
+    maxTokens: qwenCapability?.maxTokens ?? (isVolcengineGlm5x
       ? VOLCENGINE_GLM_MAX_TOKENS
       : (catalogModel?.maxTokens
         ?? (isCatalogMissingGlm53Family
           ? GLM_53_FAMILY_MAX_TOKENS
           : isCatalogMissingMimoV26Family
             ? MIMO_V26_FAMILY_MAX_TOKENS
-            : DEFAULT_MAX_TOKENS)),
+            : DEFAULT_MAX_TOKENS))),
   }
 }
 
@@ -754,7 +778,6 @@ export function normalizePiBaseUrl(baseUrl: string | undefined, provider: Provid
 export function requiresPromaUserAgent(provider: ProviderType): boolean {
   return provider === 'kimi-coding'
     || provider === 'xiaomi-token-plan'
-    || provider === 'qwen-token-plan'
     || provider === 'zhipu-coding'
     || provider === 'zhipu-coding-team'
 }

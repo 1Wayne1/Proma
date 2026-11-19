@@ -94,7 +94,7 @@ export function detectThinkingCapability(
 
   // Kimi / 智谱 / MiniMax / Token Plan 的 Anthropic 协议渠道：
   // 这些供应商的 thinking 请求参数存在兼容差异，这里直接省略以保持连接稳定。
-  // Token Plan（qwen-token-plan / xiaomi-token-plan）端点不接受 thinking 字段，
+  // xiaomi-token-plan 端点不接受 thinking 字段，
   // 发送 `thinking: {type:'disabled'}` 会导致请求失败（标题生成等场景）。
   if (
     providerType === 'kimi-api'
@@ -102,7 +102,6 @@ export function detectThinkingCapability(
     || providerType === 'zhipu-coding'
     || providerType === 'zhipu-coding-team'
     || providerType === 'minimax'
-    || providerType === 'qwen-token-plan'
     || providerType === 'xiaomi-token-plan'
   ) {
     return { mode: 'none', disableStrategy: 'omit-field' }

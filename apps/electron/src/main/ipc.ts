@@ -45,6 +45,7 @@ import type {
   VoiceDictationTextDeliveryInput,
   VoiceDictationToggleInput,
   MicPermissionResult,
+  LiveLocalPreferences,
 } from '../types'
 import type {
   RuntimeStatus,
@@ -2103,8 +2104,22 @@ export function registerIpcHandlers(): void {
   // ===== 应用设置相关 =====
   const syncLivePreferences = (updates: Partial<AppSettings>, result: AppSettings): void => {
     if ('shortcutOverrides' in updates || 'productivityTools' in updates) reregisterAllGlobalShortcuts()
-    if (!('markdownFontSize' in updates) && !('shortcutOverrides' in updates)) return
-    const payload = { markdownFontSize: result.markdownFontSize, shortcutOverrides: result.shortcutOverrides }
+    if (
+      !('markdownFontSize' in updates)
+      && !('contentFontSize' in updates)
+      && !('codeFontSize' in updates)
+      && !('terminalFontSize' in updates)
+      && !('shortcutOverrides' in updates)
+    ) {
+      return
+    }
+    const payload: LiveLocalPreferences = {
+      markdownFontSize: result.markdownFontSize,
+      contentFontSize: result.contentFontSize,
+      codeFontSize: result.codeFontSize,
+      terminalFontSize: result.terminalFontSize,
+      shortcutOverrides: result.shortcutOverrides,
+    }
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed()) window.webContents.send(SETTINGS_IPC_CHANNELS.LIVE_LOCAL_PREFERENCES_CHANGED, payload)
     }

@@ -33,7 +33,18 @@ export {
   isGpt6AstraFamily,
   isGpt6SolFamily,
   isGpt6LunaFamily,
+  isGpt61SolFamily,
+  isGpt62ReasoningModel,
 } from './model-family'
+export {
+  normalizeQwenModelId,
+  isQwenLatestModel,
+  getQwenModelCapability,
+  getQwenModelDisplayName,
+  getQwenModelPresets,
+  type QwenModelCapability,
+  type QwenLatestModelId,
+} from './qwen-model-capabilities'
 export { calculateContextUsageRatio } from './context-usage'
 export {
   getGeminiModelCapability,

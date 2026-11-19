@@ -9,5 +9,9 @@ import type { ProviderType } from '@proma/shared'
  * doubao 仅兼容历史输入，不重新加入可选 ProviderType。
  */
 export function supportsPiDeveloperRole(provider: ProviderType | 'doubao'): boolean {
-  return provider !== 'doubao' && provider !== 'doubao-api' && provider !== 'qwen' && provider !== 'custom'
+  return provider !== 'doubao'
+    && provider !== 'doubao-api'
+    && provider !== 'qwen'
+    && provider !== 'qwen-token-plan'
+    && provider !== 'custom'
 }

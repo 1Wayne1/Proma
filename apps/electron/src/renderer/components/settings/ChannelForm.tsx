@@ -32,6 +32,7 @@ import { Input } from '@/components/ui/input'
 import {
   PROVIDER_DEFAULT_URLS,
   PROVIDER_LABELS,
+  getQwenModelPresets,
   parseZhipuTeamCredentials,
   parseCodexCredentials,
   parseGithubCopilotCredentials,
@@ -90,7 +91,6 @@ const PROVIDER_TEST_MODEL_PRESETS: Partial<Record<ProviderType, string[]>> = {
   'kimi-api': ['kimi-k3', 'kimi-k2.6'],
   xiaomi: ['mimo-v2.6-pro', 'mimo-v2.6-flash', 'mimo-v2.6-pro-ultraspeed'],
   'xiaomi-token-plan': ['mimo-v2.6-pro', 'mimo-v2.6-flash', 'mimo-v2.6-pro-ultraspeed'],
-  'qwen-token-plan': ['qwen3.8-max-preview', 'qwen3.7-max', 'qwen3.7-flash', 'qwen3.6-flash'],
 }
 
 /** 供应商选项（用于 SettingsSelect） */
@@ -120,7 +120,6 @@ const ANTHROPIC_PROTOCOL_PROVIDERS: ReadonlySet<ProviderType> = new Set<Provider
   'xiaomi',
   'xiaomi-token-plan',
   'qwen-anthropic',
-  'qwen-token-plan',
 ])
 
 /**
@@ -462,12 +461,7 @@ export function ChannelForm({ channel, onSaved, onCancel }: ChannelFormProps): R
           { id: 'qwen3.7-plus', name: 'Qwen3.7 Plus', enabled: true },
         ])
       } else if (p === 'qwen-token-plan') {
-        setModels([
-          { id: 'qwen3.8-max-preview', name: 'Qwen3.8 Max Preview', enabled: true },
-          { id: 'qwen3.7-max', name: 'Qwen3.7 Max', enabled: true },
-          { id: 'qwen3.7-flash', name: 'Qwen3.7 Flash', enabled: true },
-          { id: 'qwen3.6-flash', name: 'Qwen3.6 Flash', enabled: true },
-        ])
+        setModels(getQwenModelPresets('qwen-token-plan'))
       }
     }
   }

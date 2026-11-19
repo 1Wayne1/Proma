@@ -2,13 +2,13 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | 1.0.26 |
+| 文档版本 | 1.0.27 |
 | 制定日期 | 2026-11-16 |
-| 状态 | M1、S5、S6 桌面窗口主流程及 S7 新装、覆盖升级、Automation 和 Collaboration 已通过 macOS arm64 实机验收。Pi 已升级至 `1.5.2`。macOS `0.22.80` 差异移植已在工作区完成显式网络重连、完整 Chat 模式移除及只读「历史 Chat」兼容入口与设置 UI。多屏 DPI、正式发布和 Windows 完整验收待完成 |
+| 状态 | M1、S5、S6 桌面窗口主流程及 S7 新装、覆盖升级、Automation 和 Collaboration 已通过 macOS arm64 实机验收。Pi 已升级至 `1.5.2`。macOS `0.22.80` 差异移植已在工作区完成显式网络重连、完整 Chat 模式移除及只读「历史 Chat」兼容入口与设置 UI；随后对照 macOS 新装 `0.22.97` 完成差异记录并落地三项非云端能力（`0.19.89`）。多屏 DPI、正式发布和 Windows 完整验收待完成 |
 | 开发分支 | `dev/new-version-features` |
 | 源码基线 | 桌面应用 `0.19.58`；提交 `86d9dfb511db4c1e3ffded3b6c3e312996f50cbf` |
-| 参考安装版 | `D:\Program Files\Proma`，桌面应用 `0.22.80`（macOS 差异对照目标 `/Applications/Proma.app/Contents/Resources/app.asar`，同为 `0.22.80`） |
-| 当前版本 | 提交基线 `dcdf68e9` 为桌面应用 `0.19.83`、Pi `1.5.2`、共享包 `0.1.81`；当前工作区未提交迭代已推进至桌面应用 `0.19.88`、共享包 `0.1.84`。此前的 S7 macOS 补验基线为 `10b98fb7`（桌面应用 `0.19.82`，Pi `0.87.1`） |
+| 参考安装版 | `D:\Program Files\Proma`，桌面应用 `0.22.80`（macOS `/Applications/Proma.app/Contents/Resources/app.asar` 原对照 `0.22.80`，2026-11-19 本机已更新至 `0.22.97`） |
+| 当前版本 | 提交基线 `dcdf68e9` 为桌面应用 `0.19.83`、Pi `1.5.2`、共享包 `0.1.81`；当前工作区未提交迭代已推进至桌面应用 `0.19.89`、`@proma/shared` `0.1.85`、`@proma/core` `0.2.18`。此前的 S7 macOS 补验基线为 `10b98fb7`（桌面应用 `0.19.82`，Pi `0.87.1`） |
 | 首要平台 | Windows；共享逻辑需维持 macOS/Linux 的既有能力 |
 | 接手入口 | [当前交接记录](docs/plans/2026-11-17-local-upgrade-handoff.md)，包含 M1、S5—S7 的 macOS 验收结果 |
 
@@ -991,3 +991,50 @@ S6-02 基线为 `755dbc1b`。桌面应用 `0.19.79` 更新了 `knowledge-mainten
 - `bun test --parallel=4`（沙箱内）：117 个文件共 742 项测试中 735 项通过；仅 `apps/electron/src/main/lib/adapters/pi-mcp-recovery.test.ts` 中 7 项本地回环 HTTP 用例因沙箱禁止 `127.0.0.1` 请求返回 `EPERM`。在允许回环请求下单独重跑 `pi-mcp-recovery.test.ts`，9 项（含全部 7 项回环恢复及显式重连用例）全部通过。
 - `bun run electron:build`（设置 `CLANG_MODULE_CACHE_PATH` / `SWIFT_MODULE_CACHE_PATH`）：退出码 0，完成 `main.cjs`、`agent-runtime.cjs`、`terminal-runtime.cjs`、`preload.cjs`、`vite build`、`proma` CLI 及 macOS 原生 helper 编译。
 - `git diff --check` 通过；静态检索确认已移除 `CHAT_IPC_CHANNELS`、`CHAT_TOOL_IPC_CHANNELS`、`SYSTEM_PROMPT_IPC_CHANNELS`、`ModeSwitcher`、`MIGRATE_CHAT_TO_AGENT`、`PromptSettings`，新增文件无 `any` 与 Proma 云接入。未做 macOS 桌面应用界面交互点击冒烟（由单测、IPC 构建探针与 `electron:build` 覆盖静态与契约验证）。
+
+## 38. macOS 正式版 0.22.80 -> 0.22.97 差异记录与非云端能力移植（2026-11-19）
+
+本机 `/Applications/Proma.app` 由 `0.22.80` 升级至 `0.22.97` 后，使用 REA 只读比对两个正式版包体并将差异写入本文档；按用户指令保留此前所有未提交改动，且**不移植**任何 Proma 云端服务、CDN 更新器与官方二进制图标资产，先在工作区完成非云端能力移植，桌面应用推进至 `0.19.89`、`@proma/shared` 推进至 `0.1.85`、`@proma/core` 推进至 `0.2.18` 并同步 `bun.lock`。
+
+### 38.1 正式版 `0.22.97` REA 只读对比证据
+
+- 目标包：`Info.plist` 显示 `CFBundleVersion` / `CFBundleShortVersionString` = `0.22.97`（Evidence `ev_821ef169c05aef22d9d2260a21b0023db19d79c16907203d40949d1a4b7d0b3e`）。
+- `app.asar` SHA-256：`0b9f36d9072158069bdd0a32178a63faefd5c8df2cf8c5744b51253c0a4024b2`。
+- 清单校验：`inspect_artifact` 视图 Evidence `ev_28711aaca11ab225ae80ae0549227867bb2ef13b50b7a72bce86a5d56268d163`（父 Evidence `ev_d81b223e8858e645d7b2a06406edb6afc685019ca5ede09f5e0d285e09c1ff4d`，使用 `record-and-continue`，记录相同的 10 处原生模块 ASAR 块完整性矛盾）。
+- `0.22.80` vs `0.22.97` `compare_artifacts`（对比基准 `ev_f67ed6e99fa08c626a4a32fa12b9cd869f4bbc5426a68471653b394a6027b377`）：Evidence `ev_7e2dd38b8b303b0a3258d443f1887a7f8080260cd031db8cd8da35597c633145`，结果统计为 13,563 项未变、79 项新增、77 项移除、31 项变更、10 项矛盾；只读参考提取目录为 `/private/tmp/proma-rea-02297-nov19`（Evidence `ev_ec93229445f4e7795df24c7e5f023f8e05a9234442c7087f1f649843d58ea70c`，不入库）。
+
+### 38.2 版本差异清单（非云端能力 vs 排除的云端/CDN 项）
+
+- **已移植的非云端能力**：
+  1. **整窗缩放与三轴文字缩放分离**：`Cmd/Ctrl+Plus/Minus/0` 改为渲染进程内联动调整正文、代码与终端三轴文字字号（保留 UI 控件与 Chrome 尺寸不变，并与 `TerminalTabContent` xterm.js 实例及 CSS 变量同步）；`Cmd/Ctrl+Shift+Plus/Minus/0` 独立负责主进程 Chromium 整窗 `zoomLevel`（步进 `0.5`，范围 `[-3, 9]`）。
+  2. **Linked Git worktree Diff 监听与锁隔离**：`git-diff-service.ts` 在执行 `git diff` 时注入 `GIT_OPTIONAL_LOCKS: '0'`；新增 `diff-directory-watch.ts`，当仓库为 `.git` 文本文件指向的 linked worktree 时，在主 worktree 递归监听之外额外监听外部 `linkedGitDir`（仅响应 `HEAD`/`index`/`ORIG_HEAD`/`MERGE_HEAD`/`CHERRY_PICK_HEAD`/`REVERT_HEAD` 等 diff 元数据变更）及存在的 `<commonDir>/refs/remotes/origin/main`。
+  3. **GPT-6.2 Sol/Astra、Qwen 4 / Token Plan OpenAI 兼容迁移与 HTTP `524` 重试**：新增 `gpt-6.2-sol`（`500_000` 上下文、`ultrafast` 档位）与 `gpt-6.2-astra`（`372_000` 上下文、`standard`/`fast` 档位）及 `openai-reasoning-6.2` 推理档位；将 `qwen-token-plan` 默认协议从 Anthropic 兼容地址迁移为 OpenAI 兼容模式（`https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`），新增 `qwen4-max` / `qwen4-max-preview` / `qwen3.8-max` / `qwen3.8-flash` 及兼容模型预设，自动迁移历史 `qwen-token-plan` 地址及 `qwen3.8-max-preview` ID（保留自定义代理地址），支持 DashScope 按量 `/api/v1/models` 与 Token Plan `/v1/models` 拉取解析；将 HTTP `524` 纳入可重试 `'connection'` 网络错误。
+- **明确排除的云端 / CDN / 二进制资产项（不移植）**：
+  - `computer-use-cdn-update.ts` 与 `computer-use-cdn-runtime.ts`（`https://cdn.proma.cool/cua-driver/latest.yml`、IPC 通道 `computer-use:get-update-status` / `computer-use:check-update-status` / `computer-use:update-status-changed`、设置页 Computer Use CDN 更新检查 UI 与 CuaDriver `cosign` / DR 更新弹窗）。
+  - `plan-quota-official.ts`（企业额度每月 1 日 UTC+8 04:00 自动重置与 0 余额企业药丸展示）。
+  - 官方 API Key 文档文案与链路头（如 `X-Proma-Trace-ID` 等 Proma 云网关说明）。
+  - 正式版二进制模型图标 PNG（`gpt-6.2-sol-*.png` / `gpt-6.2-astra-*.png`；本地 `model-logo.ts` 复用仓库已有开源 `GPT5Logo` / `GPT6AstraLogo` SVG 组件）。
+
+### 38.3 社区版 `0.19.89` / `@proma/shared` `0.1.85` / `@proma/core` `0.2.18` 实施要点与文件清单
+
+- **字号与整窗缩放分离**：
+  - 类型与设置：`apps/electron/src/types/settings.ts` 新增 `FontRole`、`FontSizes`、`FONT_SIZE_AXES`、`DEFAULT_FONT_SIZES`、`clampFontSize`、`resolveFontSizes` 及 `contentFontSize`/`codeFontSize`/`terminalFontSize`，扩展 `LiveLocalPreferences`。
+  - 主进程与窗口：`apps/electron/src/main/lib/font-sizes.ts`（`broadcastFontSizes`、`stepFontSizesInMain`、`resetFontSizesInMain`）、`apps/electron/src/main/ipc.ts`（`syncLivePreferences`）、`apps/electron/src/main/lib/app-window-zoom.ts`（`changeAppWindowZoom`、`resetAppWindowZoom`、`handleAppWindowZoomInput`、`installAppWindowZoomShortcuts`）、`apps/electron/src/main/index.ts`、`apps/electron/src/main/lib/workspace-memory-window.ts`、`apps/electron/src/main/lib/detached-preview-window.ts`、`apps/electron/src/main/menu.ts`。
+  - 渲染进程：`apps/electron/src/renderer/atoms/markdown-font-size.ts`（`fontSizesAtom`、`applyFontSizesToDOM`、`stepFontSizes`、`resetFontSizes`）、`apps/electron/src/renderer/main.tsx`、`apps/electron/src/renderer/components/tabs/TerminalTabContent.tsx`、`apps/electron/src/renderer/lib/shortcut-defaults.ts`、`apps/electron/src/renderer/lib/shortcut-registry.ts`、`apps/electron/src/renderer/components/shortcuts/GlobalShortcuts.tsx`、`apps/electron/src/renderer/components/shortcuts/ShortcutGuideDialog.tsx`、`apps/electron/src/renderer/components/settings/AppearanceSettings.tsx`、`apps/electron/src/renderer/lib/tips.ts`。
+- **Linked worktree Diff 监听与锁隔离**：`apps/electron/src/main/lib/git-diff-service.ts`、`apps/electron/src/main/lib/diff-directory-watch.ts`、`apps/electron/src/main/lib/workspace-watcher.ts`（使用 `watchDiffDirectory` 并传入 `{ watchDir: (targetPath, options, listener) => watch(targetPath, options, listener) }` 维持测试夹具插件拦截兼容性）。
+- **模型、Qwen 迁移与网络错误分类**：
+  - `@proma/shared`：`packages/shared/src/utils/qwen-model-capabilities.ts`、`packages/shared/src/utils/index.ts`、`packages/shared/src/utils/model-family.ts`、`packages/shared/src/utils/context-window.ts`、`packages/shared/src/types/agent.ts`、`packages/shared/src/types/channel.ts`、`packages/shared/src/types/reasoning-profile.ts`。
+  - `@proma/core`：`packages/core/src/providers/{index,anthropic-adapter,thinking-capability,url-utils,anthropic-adapter.test}.ts`。
+  - 主进程与 UI：`apps/electron/src/main/lib/qwen-models.ts`、`apps/electron/src/main/lib/adapters/pi-provider-compat.ts`、`apps/electron/src/main/lib/adapters/pi-model-registry.ts`、`apps/electron/src/main/lib/channel-manager.ts`、`apps/electron/src/main/lib/network/network-errors.ts`、`apps/electron/src/renderer/components/settings/ChannelForm.tsx`、`apps/electron/src/renderer/lib/model-logo.ts`。
+- **版本递增**：`apps/electron/package.json`（`0.19.88` -> `0.19.89`）、`packages/shared/package.json`（`0.1.84` -> `0.1.85`）、`packages/core/package.json`（`0.2.17` -> `0.2.18`）及 `bun.lock` 同步更新。
+
+### 38.4 实际校验与测试结果（`0.19.89` / shared `0.1.85` / core `0.2.18`）
+
+- 新增 / 扩展 BDD 测试：
+  - `apps/electron/src/main/lib/app-window-zoom.test.ts`（4 项：步进钳位 `[-3, 9]`、已销毁窗口安全忽略、`Cmd/Ctrl+Shift` 门控、三轴字号钳位与旧版 `markdownFontSize` 兼容）与 `apps/electron/src/renderer/lib/shortcut-defaults.test.ts`（1 项：文字缩放与只读窗口缩放快捷键绑定）。
+  - `apps/electron/src/main/lib/diff-directory-watch.test.ts`（3 项：普通仓库 vs linked worktree 外部元数据与 `origin/main` 监听、元数据过滤、缺失 ref 容错及 `close()` 释放）。
+  - `apps/electron/src/main/lib/qwen-models.test.ts`（4 项：`migrateQwenTokenPlanChannel` 地址/模型迁移与幂等、Token Plan `/v1/models` 与 DashScope `/api/v1/models` 解析、Qwen 4 / 3.8 能力/上下文/推理档位）与 `apps/electron/src/main/lib/adapters/pi-codex-fast-mode.test.ts`（共 17 项：补充 GPT-6.2 Sol/Astra、`getCodexCatalogModels()`、`supportsPiDeveloperRole` 与 `resolvePiApi`）、`apps/electron/src/main/lib/network/network-errors.test.ts`（共 14 项，含 HTTP `524`）、`packages/core/src/providers/anthropic-adapter.test.ts`（共 4 项）。
+- `bun run typecheck`：6 个工作区（`@proma/shared`、`@proma/session-core`、`@proma/core`、`@proma/ui`、`@proma/cli`、`@proma/electron`）全部通过（退出码 0）。
+- `bun test --parallel=4`（沙箱内）：120 个文件共 756 项测试中 749 项通过、`workspace-watcher-lifecycle.test.ts` 通过；仅 `apps/electron/src/main/lib/adapters/pi-mcp-recovery.test.ts` 中 7 项本地回环 HTTP 用例因沙箱禁止 `127.0.0.1` 请求返回 `EPERM`。在允许回环请求下单独重跑 `pi-mcp-recovery.test.ts`，9 项（35 expects）全部通过。
+- `CLANG_MODULE_CACHE_PATH=/tmp/proma-clang-cache SWIFT_MODULE_CACHE_PATH=/tmp/proma-swift-cache bun run electron:build`：退出码 0（24.00 s），完成 `main.cjs`（20.4mb）、`agent-runtime.cjs`（1.7mb）、`terminal-runtime.cjs`（14.2kb）、`preload.cjs`（113.7kb）、`vite build`、`proma` CLI 及 macOS 原生 helper 编译。
+- `git diff --check` 通过；静态检索确认新增与修改的源码/测试文件中无 `: any`、`as any`、`cdn.proma.cool` 或 `api.proma.cool`。未执行 Electron 启动后的桌面 UI 交互点击冒烟测试（文字/界面快捷键按键视觉效果及设置面板交互需启动 GUI 后实测）。

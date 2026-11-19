@@ -30,6 +30,7 @@ import type {
 } from '@proma/shared'
 import {
   extractZhipuCodingTeamApiToken,
+  getQwenModelPresets,
   parseZhipuTeamCredentials,
   PROVIDER_DEFAULT_URLS,
   parseCodexCredentials,
@@ -60,6 +61,13 @@ import {
   resolveOpenAIModelsUrl,
 } from '@proma/core'
 import { normalizeHttpResponse, normalizeRequestError } from './channel-test-error'
+import {
+  getQwenNativeTotal,
+  migrateQwenTokenPlanChannel,
+  parseQwenNativeModelsResponse,
+  parseQwenTokenPlanModelsResponse,
+  resolveQwenNativeModelsUrl,
+} from './qwen-models'
 import { writeJsonFileAtomic } from './safe-file'
 import pkg from '../../../package.json' with { type: 'json' }
 
@@ -93,12 +101,6 @@ const XIAOMI_PRESET_MODELS: ChannelModel[] = [
   { id: 'mimo-v2.6-flash', name: 'MiMo V2.6 Flash', enabled: true },
   // 官方限流为定制服务，默认不勾选，用户按需启用。
   { id: 'mimo-v2.6-pro-ultraspeed', name: 'MiMo V2.6 Pro UltraSpeed', enabled: false },
-]
-const QWEN_TOKEN_PLAN_PRESET_MODELS: ChannelModel[] = [
-  { id: 'qwen3.8-max-preview', name: 'Qwen3.8 Max Preview', enabled: true },
-  { id: 'qwen3.7-max', name: 'Qwen3.7 Max', enabled: true },
-  { id: 'qwen3.7-flash', name: 'Qwen3.7 Flash', enabled: true },
-  { id: 'qwen3.6-flash', name: 'Qwen3.6 Flash', enabled: true },
 ]
 /**
  * 一次性模型候选更新。每个更新使用独立 ID，避免新增模型时重新加入用户已删除的旧候选。
@@ -200,6 +202,15 @@ const PRESET_MODEL_CANDIDATE_UPDATES: readonly {
       ],
     },
   },
+  {
+    id: 'openai-codex-gpt-6-2-v1',
+    candidates: {
+      'openai-codex': [
+        { id: 'gpt-6.2-sol', name: 'GPT-6.2 Sol', enabled: true },
+        { id: 'gpt-6.2-astra', name: 'GPT-6.2 Astra', enabled: true },
+      ],
+    },
+  },
 ]
 
 /**
@@ -246,12 +257,6 @@ function resolveXiaomiTestModelId(modelId?: string, models?: ChannelModel[]): st
   const explicitModelId = modelId?.trim()
   if (explicitModelId) return explicitModelId
   return resolveFirstTestModelId(models) ?? XIAOMI_PRESET_MODELS[0]!.id
-}
-
-function resolveQwenTokenPlanTestModelId(modelId?: string, models?: ChannelModel[]): string {
-  const explicitModelId = modelId?.trim()
-  if (explicitModelId) return explicitModelId
-  return resolveFirstTestModelId(models) ?? QWEN_TOKEN_PLAN_PRESET_MODELS[0]!.id
 }
 
 function resolveDeepSeekModelsUrl(baseUrl: string): string {
@@ -318,13 +323,20 @@ function migrateConfig(config: ChannelsConfig): { config: ChannelsConfig; change
     return true
   })
   const removedLegacyChannel = retainedChannels.length !== config.channels.length
+  let migratedQwenTokenPlan = false
+  const tokenPlanMigratedChannels = retainedChannels.map((channel) => {
+    const migrated = migrateQwenTokenPlanChannel(channel)
+    if (migrated === channel) return channel
+    migratedQwenTokenPlan = true
+    return migrated
+  })
   if (version >= CONFIG_VERSION) {
-    return removedLegacyChannel
-      ? { config: { ...config, channels: retainedChannels }, changed: true }
+    return removedLegacyChannel || migratedQwenTokenPlan
+      ? { config: { ...config, channels: tokenPlanMigratedChannels }, changed: true }
       : { config, changed: false }
   }
 
-  const channels = retainedChannels.map((channel) => {
+  const channels = tokenPlanMigratedChannels.map((channel) => {
     let migratedChannel = channel
     if (version < 2 && (channel.provider === 'custom' || channel.provider === 'anthropic-compatible')) {
       const migratedUrl = migrateCompatibleChannelBaseUrl(channel.baseUrl, channel.provider)
@@ -879,7 +891,6 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
       case 'xiaomi':
       case 'xiaomi-token-plan':
       case 'qwen-anthropic':
-      case 'qwen-token-plan':
         if (provider === 'deepseek') {
           return await testDeepSeekMessages(
             channel.baseUrl,
@@ -914,14 +925,6 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
             proxyUrl,
           )
         }
-        if (provider === 'qwen-token-plan') {
-          return await testQwenTokenPlanMessages(
-            channel.baseUrl,
-            apiKey,
-            resolveQwenTokenPlanTestModelId(undefined, channel.models),
-            proxyUrl,
-          )
-        }
         if (provider === 'zhipu-coding-team') {
           return await testZhipuCodingTeam(apiKey, channel.baseUrl, proxyUrl)
         }
@@ -931,6 +934,7 @@ export async function testChannel(channelId: string): Promise<ChannelTestResult>
       case 'zhipu':
       case 'doubao-api':
       case 'qwen':
+      case 'qwen-token-plan':
       case 'custom':
         return await testOpenAICompatible(channel.baseUrl, apiKey, proxyUrl, provider)
       case 'google':
@@ -1083,37 +1087,7 @@ async function testXiaomiMessages(
 }
 
 /**
- * 通义千问 Token Plan 未开放 /models，连接测试改用用户选择的模型发起极小的 messages 请求。
- */
-async function testQwenTokenPlanMessages(
-  baseUrl: string,
-  apiKey: string,
-  modelId: string,
-  proxyUrl?: string,
-): Promise<ChannelTestResult> {
-  const url = resolveAnthropicMessagesUrl(baseUrl, 'qwen-token-plan')
-  const fetchFn = getFetchFn(proxyUrl)
-
-  const response = await fetchFn(url, withTimeout({
-    method: 'POST',
-    headers: {
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-      'User-Agent': getPromaUserAgent(pkg.version),
-    },
-    body: JSON.stringify({
-      model: modelId,
-      max_tokens: 8,
-      messages: [{ role: 'user', content: 'ping' }],
-    }),
-  }))
-
-  return normalizeHttpResponse(response)
-}
-
-/**
- * 测试 OpenAI 兼容 API 连接（OpenAI / Custom）
+ * 测试 OpenAI 兼容 API 连接（OpenAI / Custom / Qwen / Qwen Token Plan）
  */
 async function testOpenAICompatible(
   baseUrl: string,
@@ -1121,7 +1095,7 @@ async function testOpenAICompatible(
   proxyUrl?: string,
   provider: ProviderType = 'openai',
 ): Promise<ChannelTestResult> {
-  const url = resolveOpenAIModelsUrl(baseUrl)
+  const url = provider === 'qwen' ? resolveQwenNativeModelsUrl(baseUrl) : resolveOpenAIModelsUrl(baseUrl)
   const fetchFn = getFetchFn(proxyUrl)
 
   const response = await fetchFn(url, withTimeout({
@@ -1826,7 +1800,6 @@ export async function testChannelDirect(input: ChannelDirectTestInput): Promise<
       case 'xiaomi':
       case 'xiaomi-token-plan':
       case 'qwen-anthropic':
-      case 'qwen-token-plan':
         if (provider === 'deepseek') {
           return await testDeepSeekMessages(
             input.baseUrl,
@@ -1861,14 +1834,6 @@ export async function testChannelDirect(input: ChannelDirectTestInput): Promise<
             proxyUrl,
           )
         }
-        if (provider === 'qwen-token-plan') {
-          return await testQwenTokenPlanMessages(
-            input.baseUrl,
-            input.apiKey,
-            resolveQwenTokenPlanTestModelId(input.modelId),
-            proxyUrl,
-          )
-        }
         if (provider === 'zhipu-coding-team') {
           return await testZhipuCodingTeam(input.apiKey, input.baseUrl, proxyUrl)
         }
@@ -1878,6 +1843,7 @@ export async function testChannelDirect(input: ChannelDirectTestInput): Promise<
       case 'zhipu':
       case 'doubao-api':
       case 'qwen':
+      case 'qwen-token-plan':
       case 'custom':
         return await testOpenAICompatible(input.baseUrl, input.apiKey, proxyUrl, provider)
       case 'google':
@@ -1916,7 +1882,6 @@ export async function fetchModels(input: FetchModelsInput): Promise<FetchModelsR
       case 'xiaomi':
       case 'xiaomi-token-plan':
       case 'qwen-anthropic':
-      case 'qwen-token-plan':
       case 'openai-codex':
       case 'github-copilot':
       case 'xai':
@@ -1960,15 +1925,13 @@ export async function fetchModels(input: FetchModelsInput): Promise<FetchModelsR
         if (provider === 'xiaomi-token-plan') {
           return createPresetModelsResult('小米 Token Plan', XIAOMI_PRESET_MODELS)
         }
-        if (provider === 'qwen-token-plan') {
-          return createPresetModelsResult('通义千问 Token Plan', QWEN_TOKEN_PLAN_PRESET_MODELS)
-        }
         return await fetchAnthropicCompatibleModels(input.baseUrl, input.apiKey, proxyUrl, provider)
       case 'openai':
       case 'openai-responses':
       case 'zhipu':
       case 'doubao-api':
       case 'qwen':
+      case 'qwen-token-plan':
       case 'custom':
         return await fetchOpenAICompatibleModels(input.baseUrl, input.apiKey, proxyUrl, provider)
       case 'google':
@@ -2148,8 +2111,54 @@ interface OpenAIModelItem {
   owned_by?: string
 }
 
+async function fetchQwenNativeModels(
+  baseUrl: string,
+  apiKey: string,
+  proxyUrl?: string,
+): Promise<FetchModelsResult> {
+  const fetchFn = getFetchFn(proxyUrl)
+  const byId = new Map<string, ChannelModel>()
+  const pageSize = 100
+  let pageNo = 1
+
+  while (true) {
+    const url = new URL(resolveQwenNativeModelsUrl(baseUrl))
+    url.searchParams.set('providers', 'qwen')
+    url.searchParams.set('capabilities', 'TG')
+    url.searchParams.set('page_no', String(pageNo))
+    url.searchParams.set('page_size', String(pageSize))
+
+    const response = await fetchFn(url.toString(), withTimeout({
+      method: 'GET',
+      headers: { Authorization: `Bearer ${apiKey}` },
+    }))
+    if (!response.ok) {
+      const result = await normalizeHttpResponse(response)
+      return { success: false, message: result.message, models: [] }
+    }
+
+    const payload: unknown = await response.json()
+    for (const model of parseQwenNativeModelsResponse(payload)) {
+      byId.set(model.id, model)
+    }
+    const total = getQwenNativeTotal(payload)
+    if (total === undefined || pageNo * pageSize >= total) break
+    pageNo += 1
+  }
+
+  const models = getQwenModelPresets('qwen').flatMap((preset) => {
+    const model = byId.get(preset.id)
+    return model ? [model] : []
+  })
+  return {
+    success: true,
+    message: `成功获取 ${models.length} 个精选 Qwen 模型`,
+    models,
+  }
+}
+
 /**
- * 从 OpenAI 兼容 API 拉取模型列表（OpenAI / Custom）
+ * 从 OpenAI 兼容 API 拉取模型列表（OpenAI / Custom / Qwen / Qwen Token Plan）
  *
  * API: GET {baseUrl}/models
  * 通用 OpenAI 兼容格式，适用于大部分第三方供应商。
@@ -2160,6 +2169,10 @@ async function fetchOpenAICompatibleModels(
   proxyUrl?: string,
   provider: ProviderType = 'openai',
 ): Promise<FetchModelsResult> {
+  if (provider === 'qwen') {
+    return fetchQwenNativeModels(baseUrl, apiKey, proxyUrl)
+  }
+
   const url = resolveOpenAIModelsUrl(baseUrl)
   const fetchFn = getFetchFn(proxyUrl)
 
@@ -2176,6 +2189,15 @@ async function fetchOpenAICompatibleModels(
   }
 
   const data = await response.json() as { data?: OpenAIModelItem[] }
+  if (provider === 'qwen-token-plan') {
+    const models = parseQwenTokenPlanModelsResponse(data)
+    return {
+      success: true,
+      message: `成功获取 ${models.length} 个精选 Qwen 模型`,
+      models,
+    }
+  }
+
   const items = data.data ?? []
 
   const models: ChannelModel[] = items.map((item) => ({

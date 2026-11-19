@@ -284,7 +284,7 @@ export class AnthropicAdapter implements ProviderAdapter {
       base['User-Agent'] = getPromaUserAgent()
       return base
     }
-    if (this.providerType === 'xiaomi-token-plan' || this.providerType === 'qwen-token-plan') {
+    if (this.providerType === 'xiaomi-token-plan') {
       base['Authorization'] = `Bearer ${apiKey}`
       base['User-Agent'] = getPromaUserAgent()
       return base

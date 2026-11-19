@@ -18,6 +18,7 @@ describe('网络失败分类', () => {
     [{ status: 429 }, 'rate-limit'],
     [{ code: 'UND_ERR_CONNECT_TIMEOUT' }, 'timeout'],
     [{ status: 503 }, 'connection'],
+    [{ status: 524 }, 'connection'],
     [new Error('fetch failed', { cause: { code: 'ECONNRESET' } }), 'connection'],
     ['Upstream Responses stream ended before a terminal event', 'connection'],
   ] as const)('Given 瞬时失败 When 分类 Then 允许只读请求恢复', (error, kind) => {

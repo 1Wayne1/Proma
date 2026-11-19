@@ -129,6 +129,15 @@ function matchesParsed(e: KeyboardEvent, parsed: ParsedAccelerator): boolean {
   }
 
   const eventKey = normalizeKeyName(e.key)
+  if (parsed.key === 'plus') {
+    return eventKey === 'plus' || eventKey === '=' || e.code === 'Equal' || e.code === 'NumpadAdd'
+  }
+  if (parsed.key === '-') {
+    return eventKey === '-' || e.code === 'Minus' || e.code === 'NumpadSubtract'
+  }
+  if (parsed.key === '0') {
+    return eventKey === '0' || e.code === 'Digit0' || e.code === 'Numpad0'
+  }
   return eventKey === parsed.key
 }
 

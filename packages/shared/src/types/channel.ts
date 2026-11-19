@@ -61,8 +61,8 @@ export const PROVIDER_DEFAULT_URLS: Record<ProviderType, string> = {
   'doubao-api': 'https://ark.cn-beijing.volces.com/api/v3',
   qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
   'qwen-anthropic': 'https://dashscope.aliyuncs.com/apps/anthropic',
-  // Token Plan Anthropic endpoint is provided as a complete messages URL.
-  'qwen-token-plan': 'https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic/v1/messages',
+  // Token Plan 的对话与模型发现统一使用 OpenAI Chat Completions 兼容协议。
+  'qwen-token-plan': 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
   xiaomi: 'https://api.xiaomimimo.com/anthropic',
   'xiaomi-token-plan': 'https://token-plan-cn.xiaomimimo.com/anthropic',
   // 订阅登录渠道的 baseUrl 由 Pi SDK 内部管理，无需用户填写。

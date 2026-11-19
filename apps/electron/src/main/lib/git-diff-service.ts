@@ -173,6 +173,8 @@ function runGitProcess(args: string[], cwd: string, options?: { quiet?: boolean 
         env: {
           ...process.env,
           GIT_TERMINAL_PROMPT: '0',
+          // 读取 diff 不写 index stat cache，避免自身触发 worktree 元数据监听循环。
+          ...(args[0] === 'diff' ? { GIT_OPTIONAL_LOCKS: '0' } : {}),
         },
       })
 
@@ -465,7 +467,7 @@ function getPathFingerprint(path: string): string {
   }
 }
 
-function getGitCommonDirPath(gitDir: string): string {
+export function getGitCommonDirPath(gitDir: string): string {
   try {
     const commonDir = readFileSync(join(gitDir, 'commondir'), 'utf-8').trim()
     return commonDir ? resolve(gitDir, commonDir) : gitDir
@@ -474,7 +476,7 @@ function getGitCommonDirPath(gitDir: string): string {
   }
 }
 
-function getGitDirPath(gitRoot: string): string | null {
+export function getGitDirPath(gitRoot: string): string | null {
   const dotGitPath = join(gitRoot, '.git')
   try {
     if (statSync(dotGitPath).isDirectory()) return dotGitPath

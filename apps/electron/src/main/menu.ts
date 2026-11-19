@@ -1,4 +1,6 @@
 import { Menu, shell, BrowserWindow } from 'electron'
+import { APP_WINDOW_ZOOM_STEP, changeAppWindowZoom, resetAppWindowZoom } from './lib/app-window-zoom'
+import { resetFontSizesInMain, stepFontSizesInMain } from './lib/font-sizes'
 
 export function createApplicationMenu(): Menu {
   const isMac = process.platform === 'darwin'
@@ -26,6 +28,18 @@ export function createApplicationMenu(): Menu {
     } else {
       win.webContents.reload()
     }
+  }
+
+  const zoomFocusedWindow = (delta: number): void => {
+    const win = BrowserWindow.getFocusedWindow()
+    if (!win || win.isDestroyed()) return
+    changeAppWindowZoom(win.webContents, delta)
+  }
+
+  const resetZoomFocusedWindow = (): void => {
+    const win = BrowserWindow.getFocusedWindow()
+    if (!win || win.isDestroyed()) return
+    resetAppWindowZoom(win.webContents)
   }
 
   const template: Electron.MenuItemConstructorOptions[] = [
@@ -113,9 +127,48 @@ export function createApplicationMenu(): Menu {
         },
         { role: 'toggleDevTools' as const, label: '切换开发者工具' },
         { type: 'separator' as const },
-        { role: 'resetZoom' as const, label: '重置缩放' },
-        { role: 'zoomIn' as const, label: '放大' },
-        { role: 'zoomOut' as const, label: '缩小' },
+        // 文字大小：实际键位在渲染进程注册（可自定义），菜单只提供入口与提示。
+        {
+          label: isMac ? '放大文字  ⌘+' : '放大文字  Ctrl++',
+          click: () => {
+            stepFontSizesInMain(1)
+          },
+        },
+        {
+          label: isMac ? '缩小文字  ⌘-' : '缩小文字  Ctrl+-',
+          click: () => {
+            stepFontSizesInMain(-1)
+          },
+        },
+        {
+          label: isMac ? '重置文字大小  ⌘0' : '重置文字大小  Ctrl+0',
+          click: () => {
+            resetFontSizesInMain()
+          },
+        },
+        { type: 'separator' as const },
+        // 界面缩放使用 Shift 组合；普通 Cmd/Ctrl 组合继续只调整文字。
+        {
+          label: '放大界面',
+          accelerator: 'CmdOrCtrl+Shift+Plus',
+          click: () => {
+            zoomFocusedWindow(APP_WINDOW_ZOOM_STEP)
+          },
+        },
+        {
+          label: '缩小界面',
+          accelerator: 'CmdOrCtrl+Shift+Minus',
+          click: () => {
+            zoomFocusedWindow(-APP_WINDOW_ZOOM_STEP)
+          },
+        },
+        {
+          label: '重置界面缩放',
+          accelerator: 'CmdOrCtrl+Shift+0',
+          click: () => {
+            resetZoomFocusedWindow()
+          },
+        },
         { type: 'separator' as const },
         { role: 'togglefullscreen' as const, label: '切换全屏' },
       ],

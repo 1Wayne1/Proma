@@ -22,6 +22,7 @@ import {
 } from '@/atoms/tab-atoms'
 import { shortcutOverridesAtom, sendWithCmdEnterAtom } from '@/atoms/shortcut-atoms'
 import { shortcutGuideOpenAtom } from '@/atoms/shortcut-guide'
+import { fontSizesAtom, resetFontSizes, stepFontSizes } from '@/atoms/markdown-font-size'
 import {
   agentPendingPromptAtom,
   agentSessionDraftHtmlAtom,
@@ -232,6 +233,28 @@ export function GlobalShortcuts(): null {
   // ===== 快速任务窗口 → 创建会话并自动发送 =====
 
   const store = useStore()
+
+  // 文字大小调整（与主进程 Cmd/Ctrl+Shift++ / - / 0 整窗缩放分离）
+  useShortcut(
+    'font-size-increase',
+    useCallback(() => {
+      const current = store.get(fontSizesAtom)
+      void stepFontSizes(current, 1).then((next) => store.set(fontSizesAtom, next))
+    }, [store]),
+  )
+  useShortcut(
+    'font-size-decrease',
+    useCallback(() => {
+      const current = store.get(fontSizesAtom)
+      void stepFontSizes(current, -1).then((next) => store.set(fontSizesAtom, next))
+    }, [store]),
+  )
+  useShortcut(
+    'font-size-reset',
+    useCallback(() => {
+      void resetFontSizes().then((next) => store.set(fontSizesAtom, next))
+    }, [store]),
+  )
 
   useEffect(() => {
     const cleanup = window.electronAPI.onQuickTaskOpenSession(async (data) => {

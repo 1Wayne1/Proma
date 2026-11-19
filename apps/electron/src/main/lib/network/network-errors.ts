@@ -49,7 +49,7 @@ export function classifyNetworkFailure(error: unknown, signal?: AbortSignal): Ne
   if (statuses.includes(429)) return result('rate-limit', true)
   if (statuses.includes(408) || names.includes('TimeoutError') || /TIMEOUT|TIMEDOUT/.test(code)) return result('timeout', true)
   if (statuses.some(value => value >= 400 && value < 500)) return result('validation')
-  if (statuses.some(value => [500, 502, 503, 504].includes(value))) return result('connection', true)
+  if (statuses.some(value => [500, 502, 503, 504, 524].includes(value))) return result('connection', true)
   if (isTransientNetworkError(message, code) || isMalformedResponseError(message)) return result('connection', true)
   return result('unknown')
 }

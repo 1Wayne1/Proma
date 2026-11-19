@@ -6,7 +6,7 @@
  */
 
 import * as React from 'react'
-import { useAtom, useAtomValue } from 'jotai'
+import { useAtom, useAtomValue, useSetAtom } from 'jotai'
 import { Check } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -24,6 +24,8 @@ import {
   applyThemeToDOM,
 } from '@/atoms/theme'
 import {
+  FONT_SIZE_PX,
+  fontSizesAtom,
   markdownFontSizeAtom,
   updateMarkdownFontSize,
 } from '@/atoms/markdown-font-size'
@@ -166,14 +168,15 @@ const ICON_VARIANTS: readonly IconVariant[] = [
 /** 根据平台返回缩放快捷键提示 */
 const isMac = navigator.userAgent.includes('Mac')
 const ZOOM_HINT = isMac
-  ? '使用 ⌘+ 放大、⌘- 缩小、⌘0 恢复默认大小'
-  : '使用 Ctrl++ 放大、Ctrl+- 缩小、Ctrl+0 恢复默认大小'
+  ? '按 ⌘+ / ⌘- 调整文字，加 Shift 可缩放整个界面，⌘0 / ⌘⇧0 分别重置'
+  : '按 Ctrl++ / Ctrl+- 调整文字，加 Shift 可缩放整个界面，Ctrl+0 / Ctrl+Shift+0 分别重置'
 
 export function AppearanceSettings(): React.ReactElement {
   const [themeMode, setThemeMode] = useAtom(themeModeAtom)
   const [themeStyle, setThemeStyle] = useAtom(themeStyleAtom)
   const systemIsDark = useAtomValue(systemIsDarkAtom)
   const [markdownFontSize, setMarkdownFontSize] = useAtom(markdownFontSizeAtom)
+  const setFontSizes = useSetAtom(fontSizesAtom)
 
   /** 切换主题模式 */
   const handleThemeChange = React.useCallback((value: string) => {
@@ -202,8 +205,9 @@ export function AppearanceSettings(): React.ReactElement {
   const handleMarkdownFontSizeChange = React.useCallback((value: string) => {
     const size = value as MarkdownFontSize
     setMarkdownFontSize(size)
-    updateMarkdownFontSize(size)
-  }, [setMarkdownFontSize])
+    setFontSizes((prev) => ({ ...prev, content: FONT_SIZE_PX[size] }))
+    void updateMarkdownFontSize(size)
+  }, [setFontSizes, setMarkdownFontSize])
 
   return (
     <div className="space-y-6">

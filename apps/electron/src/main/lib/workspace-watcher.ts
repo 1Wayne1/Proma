@@ -23,6 +23,7 @@ import { AGENT_IPC_CHANNELS } from '@proma/shared'
 import { getAgentWorkspacesDir } from './config-paths'
 import { listAgentSessions } from './agent-session-manager'
 import { invalidateGitDiffCache } from './git-diff-service'
+import { watchDiffDirectory, type DiffDirectoryWatcher } from './diff-directory-watch'
 import { classifyWorkspaceWatchFilename, isHighNoisePath, normalizeWatchFilename, shouldNotifyForWatchFilename } from './workspace-watcher-utils'
 
 /** debounce 延迟（ms） */
@@ -47,8 +48,8 @@ function scheduleWatcherRestart(callback: () => void): void {
 
 let watcher: FSWatcher | null = null
 
-/** 已存在的附加目录监听器：路径 → FSWatcher */
-const attachedWatchers = new Map<string, FSWatcher>()
+/** 已存在的附加目录监听器：路径 → DiffDirectoryWatcher */
+const attachedWatchers = new Map<string, DiffDirectoryWatcher>()
 const directorySubscriptions = new DirectoryWatchSubscriptions(path => {
   // 主监听已经递归覆盖受管目录，不另开重复的底层 watcher。
   if (!isWithinTurnRoot(resolve(getAgentWorkspacesDir()), path)) startAttachedDirectory(path)
@@ -352,18 +353,16 @@ function startAttachedDirectory(dirPath: string): void {
   if (attachedWatchers.has(dirPath)) return
 
   try {
-    const w = watch(dirPath, { recursive: true }, (_eventType, filename) => {
+    const w = watchDiffDirectory(dirPath, true, (normalizedFilename) => {
       if (!workspaceWatcherActive || attachedWatchers.get(dirPath) !== w || !directorySubscriptions.has(dirPath)) return
-      const normalizedFilename = normalizeWatchFilename(filename)
-      if (normalizedFilename === null || !shouldNotifyForWatchFilename(normalizedFilename)) return
-      const changedPath = join(dirPath, normalizedFilename)
+      const changedPath = normalizedFilename ? join(dirPath, normalizedFilename) : dirPath
       invalidateGitDiffCache(changedPath)
       notifyWorkspaceFilesChanged(changedPath)
-    })
+    }, { watchDir: (targetPath, options, listener) => watch(targetPath, options, listener) })
 
     // 同主 watcher：监听 'error' 防止运行时异常拖死主进程。
     // 附加目录通常是用户外接的项目目录，断电/挂载/权限变化更易触发。
-    w.on('error', (err) => {
+    w.onError((err) => {
       if (attachedWatchers.get(dirPath) !== w) return
       console.error('[附加目录监听] 运行时错误，切换为父目录监听:', dirPath, err)
       try { w.close() } catch { /* 已关闭 */ }

@@ -143,6 +143,8 @@ const MODEL_LOGO_MAP: Record<string, string> = {
   o1: GPTo1Logo,
   o3: GPTo1Logo,
   o4: GPTo1Logo,
+  'gpt-6\\.2-astra$': GPT6AstraLogo,
+  'gpt-6\\.2-sol$': GPT5Logo,
   'gpt-6-astra$': GPT6AstraLogo,
   'gpt-5-mini': GPT5MiniLogo,
   'gpt-5-nano': GPT5NanoLogo,

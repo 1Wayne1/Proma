@@ -251,6 +251,56 @@ export type MarkdownFontSize = 'small' | 'medium' | 'large'
 /** 默认 Markdown 字号档位 */
 export const DEFAULT_MARKDOWN_FONT_SIZE: MarkdownFontSize = 'medium'
 
+/** 三类文字缩放角色 */
+export type FontRole = 'content' | 'code' | 'terminal'
+
+/** 三类文字字号（px） */
+export interface FontSizes {
+  content: number
+  code: number
+  terminal: number
+}
+
+/** 三类文字字号配置轴（默认值即产品基线，Cmd/Ctrl+0 重置至此） */
+export const FONT_SIZE_AXES = {
+  content: { field: 'contentFontSize', min: 10, max: 22, default: 15 },
+  code: { field: 'codeFontSize', min: 10, max: 16, default: 12 },
+  terminal: { field: 'terminalFontSize', min: 10, max: 20, default: 14 },
+} as const
+
+export const DEFAULT_FONT_SIZES: FontSizes = {
+  content: FONT_SIZE_AXES.content.default,
+  code: FONT_SIZE_AXES.code.default,
+  terminal: FONT_SIZE_AXES.terminal.default,
+}
+
+const LEGACY_MARKDOWN_FONT_SIZE_PX: Record<MarkdownFontSize, number> = {
+  small: 13,
+  medium: 15,
+  large: 17,
+}
+
+/** 对单个字号角色取值并钳位到合法范围 */
+export function clampFontSize(role: FontRole, value: unknown): number {
+  const axis = FONT_SIZE_AXES[role]
+  const px = typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : axis.default
+  return Math.min(axis.max, Math.max(axis.min, px))
+}
+
+/** 从应用设置解析三类字号；缺少 contentFontSize 时兼容旧 markdownFontSize 档位 */
+export function resolveFontSizes(
+  settings: Pick<AppSettings, 'contentFontSize' | 'codeFontSize' | 'terminalFontSize' | 'markdownFontSize'> | undefined,
+): FontSizes {
+  const fallbackContent = settings?.markdownFontSize
+    ? LEGACY_MARKDOWN_FONT_SIZE_PX[settings.markdownFontSize]
+    : undefined
+  return {
+    content: clampFontSize('content', settings?.contentFontSize ?? fallbackContent),
+    code: clampFontSize('code', settings?.codeFontSize),
+    terminal: clampFontSize('terminal', settings?.terminalFontSize),
+  }
+}
+
 /** macOS 原生 Agent 灵动岛偏好。 */
 export interface AgentIslandSettings {
   /** 是否启用 Agent / 近期 Todo 日程的灵动岛提醒，默认 true。 */
@@ -351,6 +401,12 @@ export interface AppSettings {
   richTextRenderingEnabled?: boolean
   /** Markdown 预览字号档位（默认 'medium'，对应 15px） */
   markdownFontSize?: MarkdownFontSize
+  /** 正文字号（px，10–22，默认 15） */
+  contentFontSize?: number
+  /** 代码块字号（px，10–16，默认 12） */
+  codeFontSize?: number
+  /** 终端字号（px，10–20，默认 14） */
+  terminalFontSize?: number
   /** 应用图标变体 ID（dock + window icon），'default' 或 logo 变体 id */
   appIconVariant?: string
   /** 语音输入设置（Access Token 以加密态存储，由专用服务解密后返回渲染进程） */
@@ -406,7 +462,10 @@ export interface PersistedTabSettings {
 }
 
 /** 跨窗口即时同步的展示偏好。 */
-export type LiveLocalPreferences = Pick<AppSettings, 'markdownFontSize' | 'shortcutOverrides'>
+export type LiveLocalPreferences = Pick<
+  AppSettings,
+  'markdownFontSize' | 'contentFontSize' | 'codeFontSize' | 'terminalFontSize' | 'shortcutOverrides'
+>
 
 /** 设置 IPC 通道 */
 export const SETTINGS_IPC_CHANNELS = {
