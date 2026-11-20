@@ -236,6 +236,7 @@ export function AppShell(): React.ReactElement {
   const usesWidePanelLayout = rightPanelLayout.hasOpenedWideWorkspace || activeRightPanelSplit !== null
   const persistedRightPanelWidth = usesWidePanelLayout ? effectiveWidePanelWidth : clampedRightPanelWidth
   const displayedRightPanelWidth = draggedRightPanelWidth ?? persistedRightPanelWidth
+  const toastRightOffset = 12 + (!settingsOpen && showRightPanel && isPanelOpen ? displayedRightPanelWidth : 0)
 
   React.useEffect(() => {
     return () => rightPanelDragCleanup.current?.()
@@ -383,8 +384,6 @@ export function AppShell(): React.ReactElement {
             <div className="flex-1 min-w-0 relative z-[60]">
               {/* 主内容区域（TabBar + TabContent） */}
               <MainArea />
-              {/* 全局 Toast 固定在 Agent 历史主区右上角，不进入右侧原生浏览器面板。 */}
-              <Toaster position="top-right" offset={{ top: 58, right: 12 }} className="agent-history-toaster" />
             </div>
 
             {/* 右侧边栏：Agent 文件面板 */}
@@ -412,6 +411,8 @@ export function AppShell(): React.ReactElement {
             <SettingsPanel onClose={() => setSettingsOpen(false)} />
           </div>
         )}
+        {/* 通知保持挂载，设置覆盖主区时仍可操作。会话内避开右侧原生浏览器。 */}
+        <Toaster position="top-right" offset={{ top: 58, right: toastRightOffset }} className="agent-history-toaster" />
 
       </div>
     </>

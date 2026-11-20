@@ -128,7 +128,7 @@ function FloatingPreviewCard({ sessionId, runGeneration, target, index, onHide, 
       <button type="button" aria-label={`打开完整${name}`} disabled={opening} onClick={() => void open(false)}
         className="flex h-[100px] w-full min-w-0 items-center justify-center overflow-hidden bg-muted/45 text-left text-xs text-muted-foreground hover:bg-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
         {kind === 'browser' && frame ? <img draggable={false} src={`data:image/jpeg;base64,${frame}`} alt="当前网页缩略图" className="size-full object-contain" />
-          : frame ? <pre className="w-full overflow-hidden whitespace-pre-wrap break-all px-2 font-mono text-[10px] leading-4 text-foreground">{frame.trimEnd().split('\n').slice(-5).join('\n')}</pre>
+          : frame ? <pre className="max-h-full w-full overflow-hidden whitespace-pre px-2 font-mono text-[10px] leading-4 text-foreground">{frame.trimEnd().split('\n').slice(-5).join('\n')}</pre>
           : kind === 'browser' ? '等待网页画面' : '等待终端输出'}
       </button>
       <div className="flex h-8 items-center justify-end gap-1 px-1">

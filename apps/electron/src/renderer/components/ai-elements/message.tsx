@@ -727,7 +727,7 @@ const MarkdownInlineCode = React.memo(function MarkdownInlineCode({
   const text = typeof codeChildren === 'string' ? codeChildren : ''
   const fallbackCode = (
     <code
-      className="rounded bg-foreground/10 px-[0.35em] py-[0.15em] text-[0.875em] font-mono font-medium"
+      className="rounded bg-foreground/10 px-[0.35em] py-[0.15em] text-[length:var(--code-font-size,0.875em)] font-mono font-medium"
       {...codeProps}
     >
       {codeChildren}
